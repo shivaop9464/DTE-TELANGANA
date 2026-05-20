@@ -1,0 +1,101 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "System user with role-based access",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY", "AUDITOR", "EMPLOYEE"]
+        },
+        "institutionId": { "type": "string", "description": "ID of the institution if associated" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "employees": {
+      "title": "Employee",
+      "description": "Employee master record",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "name": { "type": "string" },
+        "fatherName": { "type": "string" },
+        "dob": { "type": "string", "format": "date" },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
+        "community": { "type": "string" },
+        "religion": { "type": "string" },
+        "mobile": { "type": "string" },
+        "email": { "type": "string" },
+        "qualification": { "type": "string" },
+        "designation": { "type": "string" },
+        "branch": { "type": "string" },
+        "institutionId": { "type": "string" },
+        "biometricId": { "type": "string" },
+        "workingSince": { "type": "string", "format": "date" },
+        "payScale": { "type": "string" },
+        "basicPay": { "type": "number" },
+        "appointmentDate": { "type": "string", "format": "date" },
+        "retirementDate": { "type": "string", "format": "date" },
+        "deputationStatus": { "type": "boolean" },
+        "phCategory": { "type": "string" },
+        "remarks": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "documentUrls": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["employeeId", "name", "institutionId", "status"]
+    },
+    "institutions": {
+      "title": "Institution",
+      "description": "Government Polytechnic Institution",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "district": { "type": "string" },
+        "principalName": { "type": "string" },
+        "staffStrength": { "type": "number" },
+        "workingStrength": { "type": "number" },
+        "vacancies": { "type": "number" }
+      },
+      "required": ["id", "name", "district"]
+    },
+    "auditLogs": {
+      "title": "Audit Log",
+      "description": "Activity logs for security and tracking",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "action": { "type": "string" },
+        "entity": { "type": "string" },
+        "entityId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "details": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profiles and roles"
+    },
+    "/employees/{employeeId}": {
+      "schema": "employees",
+      "description": "Employee master records"
+    },
+    "/institutions/{institutionId}": {
+      "schema": "institutions",
+      "description": "Institution profiles"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "auditLogs",
+      "description": "System activity logs"
+    }
+  }
+}

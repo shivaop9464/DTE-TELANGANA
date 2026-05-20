@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-tg-green: #008444;
+  --color-tg-gold: #FFD700;
+  --color-tg-dark: #004d26;
+  --color-tg-light: #f0fdf4;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 font-sans;
+  }
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-sm rounded-xl;
+}
+
+.tg-gradient {
+  background: linear-gradient(135deg, #008444 0%, #004d26 100%);
+}

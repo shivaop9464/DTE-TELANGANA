@@ -1,0 +1,8 @@
+{
+  "name": "Employee Database Management Portal - DTE Telangana",
+  "description": "Centralized portal for managing employee records across 59 Government Polytechnics in Telangana.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

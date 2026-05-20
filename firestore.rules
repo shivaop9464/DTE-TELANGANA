@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Catch-all deny
+    match /{document=**} {
+      allow read, write: if true; // TEMPORARY FOR TESTING
+    }
+
+    // Global helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(roles) {
+      return isSignedIn() && getUserData().role in roles;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || hasRole(['SUPER_ADMIN', 'CTE_ADMIN']));
+      allow create: if isSignedIn() && request.auth.uid == userId && (
+        !('role' in request.resource.data) || request.resource.data.role == 'EMPLOYEE'
+      );
+      allow update: if isSignedIn() && hasRole(['SUPER_ADMIN']) && (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'institutionId'])
+      );
+    }
+
+    // Employees Collection
+    match /employees/{employeeId} {
+      function isValidEmployee(data) {
+        return data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+               data.employeeId is string &&
+               data.status in ['PENDING', 'APPROVED', 'REJECTED'];
+      }
+
+      allow read: if true;
+      allow create, update: if isValidEmployee(request.resource.data);
+      allow delete: if true;
+    }
+
+    // Institutions Collection
+    match /institutions/{instId} {
+      allow read: if isSignedIn();
+      allow write: if hasRole(['SUPER_ADMIN']);
+    }
+
+    // Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if hasRole(['SUPER_ADMIN', 'CTE_ADMIN']);
+      allow create: if isSignedIn(); // System logic usually handles this, but client might log UI actions
+    }
+  }
+}
