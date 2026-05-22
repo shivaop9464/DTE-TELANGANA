@@ -1,101 +1,299 @@
 {
   "entities": {
-    "users": {
-      "title": "User",
-      "description": "System user with role-based access",
+    "Role": {
+      "title": "Role",
+      "description": "User Roles within the Department of Technical Education",
       "type": "object",
       "properties": {
-        "uid": { "type": "string" },
-        "email": { "type": "string" },
-        "displayName": { "type": "string" },
-        "role": {
+        "id": {
           "type": "string",
-          "enum": ["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY", "AUDITOR", "EMPLOYEE"]
+          "description": "The unique ID of the role"
         },
-        "institutionId": { "type": "string", "description": "ID of the institution if associated" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "name": {
+          "type": "string",
+          "description": "The human-readable name of the role"
+        },
+        "description": {
+          "type": "string",
+          "description": "Roles duties and access details"
+        }
       },
-      "required": ["uid", "email", "role"]
+      "required": ["id", "name"]
     },
-    "employees": {
-      "title": "Employee",
-      "description": "Employee master record",
-      "type": "object",
-      "properties": {
-        "employeeId": { "type": "string" },
-        "name": { "type": "string" },
-        "fatherName": { "type": "string" },
-        "dob": { "type": "string", "format": "date" },
-        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
-        "community": { "type": "string" },
-        "religion": { "type": "string" },
-        "mobile": { "type": "string" },
-        "email": { "type": "string" },
-        "qualification": { "type": "string" },
-        "designation": { "type": "string" },
-        "branch": { "type": "string" },
-        "institutionId": { "type": "string" },
-        "biometricId": { "type": "string" },
-        "workingSince": { "type": "string", "format": "date" },
-        "payScale": { "type": "string" },
-        "basicPay": { "type": "number" },
-        "appointmentDate": { "type": "string", "format": "date" },
-        "retirementDate": { "type": "string", "format": "date" },
-        "deputationStatus": { "type": "boolean" },
-        "phCategory": { "type": "string" },
-        "remarks": { "type": "string" },
-        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
-        "documentUrls": { "type": "array", "items": { "type": "string" } },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["employeeId", "name", "institutionId", "status"]
-    },
-    "institutions": {
+    "Institution": {
       "title": "Institution",
-      "description": "Government Polytechnic Institution",
+      "description": "Polytechnic Institutions and details",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "district": { "type": "string" },
-        "principalName": { "type": "string" },
-        "staffStrength": { "type": "number" },
-        "workingStrength": { "type": "number" },
-        "vacancies": { "type": "number" }
+        "id": {
+          "type": "string",
+          "description": "The unique Institution Code e.g. INST-HYD"
+        },
+        "name": {
+          "type": "string",
+          "description": "The full name of the Polytechnic"
+        },
+        "district": {
+          "type": "string",
+          "description": "District in Telangana"
+        },
+        "principalName": {
+          "type": "string",
+          "description": "Name of the Principal"
+        },
+        "staffStrength": {
+          "type": "integer",
+          "description": "Sanctioned staff strength"
+        },
+        "workingStrength": {
+          "type": "integer",
+          "description": "Current working staff count"
+        },
+        "vacancies": {
+          "type": "integer",
+          "description": "Calculated vacant positions"
+        }
       },
       "required": ["id", "name", "district"]
     },
-    "auditLogs": {
-      "title": "Audit Log",
-      "description": "Activity logs for security and tracking",
+    "User": {
+      "title": "User",
+      "description": "System Users and portal credentials",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "action": { "type": "string" },
-        "entity": { "type": "string" },
-        "entityId": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "details": { "type": "string" }
-      }
+        "uid": {
+          "type": "string",
+          "description": "User unique identifier"
+        },
+        "username": {
+          "type": "string",
+          "description": "Unique username"
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name"
+        },
+        "role": {
+          "type": "string",
+          "description": "The assigned user role key"
+        },
+        "password": {
+          "type": "string",
+          "description": "Bcrypt password hash"
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Disabled account status"
+        },
+        "institutionId": {
+          "type": "string",
+          "description": "Optionally assigned polytechnic institution ID"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["uid", "username", "email", "role", "password"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Complete service profiles of polytechnic regular employees",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Primary regular employee registration UUID"
+        },
+        "name": {
+          "type": "string"
+        },
+        "fatherName": {
+          "type": "string"
+        },
+        "employeeId": {
+          "type": "string"
+        },
+        "dob": {
+          "type": "string"
+        },
+        "gender": {
+          "type": "string"
+        },
+        "community": {
+          "type": "string"
+        },
+        "subCaste": {
+          "type": "string"
+        },
+        "religion": {
+          "type": "string"
+        },
+        "phCategory": {
+          "type": "string"
+        },
+        "phPercentage": {
+          "type": "string"
+        },
+        "maritalStatus": {
+          "type": "string"
+        },
+        "nativePlace": {
+          "type": "string"
+        },
+        "nativeDistrict": {
+          "type": "string"
+        },
+        "mobile": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "qualification": {
+          "type": "string"
+        },
+        "designation": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "institutionId": {
+          "type": "string"
+        },
+        "biometricId": {
+          "type": "string"
+        },
+        "workingSince": {
+          "type": "string"
+        },
+        "againstPostDetails": {
+          "type": "string"
+        },
+        "payScale": {
+          "type": "string"
+        },
+        "aictePayLevel": {
+          "type": "string"
+        },
+        "basicPay": {
+          "type": "number"
+        },
+        "incrementDate": {
+          "type": "string"
+        },
+        "initialAppointmentPost": {
+          "type": "string"
+        },
+        "initialJoiningDate": {
+          "type": "string"
+        },
+        "regularizationDate": {
+          "type": "string"
+        },
+        "superannuationDate": {
+          "type": "string"
+        },
+        "contractServiceDetails": {
+          "type": "string"
+        },
+        "contractPeriod": {
+          "type": "string"
+        },
+        "localCadre": {
+          "type": "string"
+        },
+        "cadreChoiceStatus": {
+          "type": "string"
+        },
+        "deputationStatus": {
+          "type": "string"
+        },
+        "deputationInstitution": {
+          "type": "string"
+        },
+        "spouseEmploymentStatus": {
+          "type": "string"
+        },
+        "spouseDetails": {
+          "type": "string"
+        },
+        "remarks": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "certificateName": {
+          "type": "string"
+        },
+        "certificateUrl": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "employeeId", "mobile", "email", "institutionId"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Trace logging entries of system events",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userEmail": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "entityId": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "userEmail", "action", "timestamp"]
     }
   },
   "firestore": {
-    "/users/{userId}": {
-      "schema": "users",
-      "description": "User profiles and roles"
+    "roles": {
+      "schema": "Role",
+      "description": "User Roles within the system"
     },
-    "/employees/{employeeId}": {
-      "schema": "employees",
-      "description": "Employee master records"
+    "institutions": {
+      "schema": "Institution",
+      "description": "Institutions and details"
     },
-    "/institutions/{institutionId}": {
-      "schema": "institutions",
-      "description": "Institution profiles"
+    "users": {
+      "schema": "User",
+      "description": "System users reference table"
     },
-    "/auditLogs/{logId}": {
-      "schema": "auditLogs",
-      "description": "System activity logs"
+    "employees": {
+      "schema": "Employee",
+      "description": "Staff and faculty service registers"
+    },
+    "auditLogs": {
+      "schema": "AuditLog",
+      "description": "System event audit trail records"
     }
   }
 }

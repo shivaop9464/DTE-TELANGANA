@@ -11,8 +11,6 @@ import {
   Edit2,
   Trash2
 } from 'lucide-react';
-import { collection, query, getDocs, orderBy, setDoc, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { Institution } from '../types';
 
 export function InstitutionList() {
@@ -33,10 +31,16 @@ export function InstitutionList() {
 
   const fetchInstitutions = async () => {
     try {
-      const q = query(collection(db, 'institutions'), orderBy('name'));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Institution[];
-      setInstitutions(data);
+      const token = localStorage.getItem('dte_token');
+      const res = await fetch('/api/institutions', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setInstitutions(data);
+      } else {
+        setInstitutions([]);
+      }
     } catch (err) {
       console.error('Error fetching institutions:', err);
     } finally {
@@ -58,18 +62,34 @@ export function InstitutionList() {
   const handleRegister = async (e: FormEvent) => {
     e.preventDefault();
     try {
+      const token = localStorage.getItem('dte_token');
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      };
+
       if (editingId) {
-        await updateDoc(doc(db, 'institutions', editingId), {
-          ...formData,
-          vacancies: formData.staffStrength - formData.workingStrength
+        const res = await fetch(`/api/institutions/${editingId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            ...formData,
+            vacancies: formData.staffStrength - formData.workingStrength
+          })
         });
+        if (!res.ok) throw new Error("Failed to update institution");
       } else {
         const instId = formData.id || `INST-${Date.now()}`;
-        await setDoc(doc(db, 'institutions', instId), {
-          ...formData,
-          id: instId,
-          vacancies: formData.staffStrength - formData.workingStrength
+        const res = await fetch('/api/institutions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            ...formData,
+            id: instId,
+            vacancies: formData.staffStrength - formData.workingStrength
+          })
         });
+        if (!res.ok) throw new Error("Failed to create institution");
       }
       setIsModalOpen(false);
       setEditingId(null);

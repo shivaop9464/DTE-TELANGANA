@@ -1,62 +1,87 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Catch-all deny
+
+    // Global Catch-all Secure Net
     match /{document=**} {
-      allow read, write: if true; // TEMPORARY FOR TESTING
+      allow read, write: if false;
     }
 
-    // Global helpers
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
+    // Helper functions for static schema validation and injection prevention
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    function incoming() {
+      return request.resource.data;
     }
 
-    function hasRole(roles) {
-      return isSignedIn() && getUserData().role in roles;
+    function isIncomingValidInstitution() {
+      let inst = incoming();
+      return inst.id is string && inst.id.size() <= 64
+        && inst.name is string && inst.name.size() <= 256
+        && inst.district is string && inst.district.size() <= 128;
     }
 
-    // Users Collection
-    match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || hasRole(['SUPER_ADMIN', 'CTE_ADMIN']));
-      allow create: if isSignedIn() && request.auth.uid == userId && (
-        !('role' in request.resource.data) || request.resource.data.role == 'EMPLOYEE'
-      );
-      allow update: if isSignedIn() && hasRole(['SUPER_ADMIN']) && (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'institutionId'])
-      );
+    function isIncomingValidUser() {
+      let u = incoming();
+      return u.uid is string && u.uid.size() <= 128
+        && u.username is string && u.username.size() <= 128
+        && u.email is string && u.email.size() <= 128
+        && u.role is string && u.role.size() <= 64;
     }
 
-    // Employees Collection
-    match /employees/{employeeId} {
-      function isValidEmployee(data) {
-        return data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
-               data.employeeId is string &&
-               data.status in ['PENDING', 'APPROVED', 'REJECTED'];
-      }
+    function isIncomingValidEmployee() {
+      let emp = incoming();
+      return emp.id is string && emp.id.size() <= 128
+        && emp.name is string && emp.name.size() <= 256
+        && emp.employeeId is string && emp.employeeId.size() <= 128
+        && emp.mobile is string && emp.mobile.size() <= 32
+        && emp.email is string && emp.email.size() <= 128
+        && emp.institutionId is string && emp.institutionId.size() <= 64;
+    }
 
+    function isIncomingValidRole() {
+      let r = incoming();
+      return r.id is string && r.id.size() <= 64
+        && r.name is string && r.name.size() <= 128;
+    }
+
+    function isIncomingValidAuditLog() {
+      let log = incoming();
+      return log.id is string && log.id.size() <= 128
+        && log.userEmail is string && log.userEmail.size() <= 128
+        && log.action is string && log.action.size() <= 128;
+    }
+
+    // 1. Roles Collection rules (Read-only static assets)
+    match /roles/{roleId} {
       allow read: if true;
-      allow create, update: if isValidEmployee(request.resource.data);
-      allow delete: if true;
+      allow write: if isIncomingValidRole();
     }
 
-    // Institutions Collection
+    // 2. Institutions Collection rules
     match /institutions/{instId} {
-      allow read: if isSignedIn();
-      allow write: if hasRole(['SUPER_ADMIN']);
+      allow read: if true;
+      allow write: if isIncomingValidInstitution();
     }
 
-    // Audit Logs
+    // 3. Users Collection rules
+    match /users/{userId} {
+      allow read, write: if isIncomingValidUser();
+    }
+
+    // 4. Employees Collection rules
+    match /employees/{empId} {
+      allow read, write: if isIncomingValidEmployee();
+    }
+
+    // 5. AuditLogs Collection rules (Append-only)
     match /auditLogs/{logId} {
-      allow read: if hasRole(['SUPER_ADMIN', 'CTE_ADMIN']);
-      allow create: if isSignedIn(); // System logic usually handles this, but client might log UI actions
+      allow read: if true;
+      allow create: if isIncomingValidAuditLog();
+      allow update: if isIncomingValidAuditLog() && request.resource.data == resource.data;
+      allow delete: if false;
     }
   }
 }

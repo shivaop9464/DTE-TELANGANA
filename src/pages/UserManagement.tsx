@@ -6,7 +6,11 @@ import {
   ShieldCheck, 
   Search,
   MoreVertical,
-  Edit2
+  Edit2,
+  Database,
+  RefreshCw,
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { formatDate } from '../lib/utils';
@@ -26,6 +30,34 @@ export function UserManagement() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [institutions, setInstitutions] = useState<any[]>([]);
   
+  // Firebase manual synchronization panel state
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncResults, setSyncResults] = useState<any | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const handleForceSync = async () => {
+    setSyncLoading(true);
+    setSyncResults(null);
+    setSyncError(null);
+    try {
+      const token = localStorage.getItem('dte_token');
+      const res = await fetch('/api/admin/sync-firebase', {
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSyncResults(data);
+      } else {
+        setSyncError(data.error || "Failed to synchronize to Firebase. Make sure Firestore is provisioned.");
+      }
+    } catch (e: any) {
+      setSyncError(e.message || "Network error occurred");
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
   // New user form state
   const [formData, setFormData] = useState({
     username: '',
@@ -153,6 +185,82 @@ export function UserManagement() {
           <UserPlus className="w-4 h-4" />
           Create Admin User
         </button>
+      </div>
+
+      {/* Firebase Database Sync Panel */}
+      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex gap-3">
+            <div className="w-10 h-10 rounded-xl bg-tg-green/10 flex items-center justify-center text-tg-green shrink-0">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">Google Cloud Firestore Integration</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Ensure all system users and administrative roles are completely stored and active in Firestore.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleForceSync}
+            disabled={syncLoading}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-850 disabled:opacity-50 transition-all cursor-pointer whitespace-nowrap shrink-0 self-start sm:self-center"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncLoading ? 'animate-spin' : ''}`} />
+            {syncLoading ? 'Syncing to Cloud...' : 'Force Sync to Firestore'}
+          </button>
+        </div>
+
+        {syncResults && (
+          <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex flex-col gap-3 animate-in fade-in duration-200">
+            <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs">
+              <CheckCircle2 className="w-4 h-4" />
+              Database Synchronized successfully! Official connection established to Firestore.
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="bg-white/80 p-3 rounded-lg border border-emerald-100/50">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Users / Creds</span>
+                <span className="font-mono font-bold text-emerald-800 text-sm">
+                  {syncResults.users.successful} / {syncResults.users.attempted}
+                </span>
+              </div>
+              <div className="bg-white/80 p-3 rounded-lg border border-emerald-100/50">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Institutions</span>
+                <span className="font-mono font-bold text-emerald-800 text-sm">
+                  {syncResults.institutions.successful} / {syncResults.institutions.attempted}
+                </span>
+              </div>
+              <div className="bg-white/80 p-3 rounded-lg border border-emerald-100/50">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Employees</span>
+                <span className="font-mono font-bold text-emerald-800 text-sm">
+                  {syncResults.employees.successful} / {syncResults.employees.attempted}
+                </span>
+              </div>
+              <div className="bg-white/80 p-3 rounded-lg border border-emerald-100/50">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Roles</span>
+                <span className="font-mono font-bold text-emerald-800 text-sm">
+                  {syncResults.roles.successful} / {syncResults.roles.attempted}
+                </span>
+              </div>
+              <div className="bg-white/80 p-3 rounded-lg border border-emerald-100/50 col-span-2 sm:col-span-1">
+                <span className="block text-[10px] text-slate-400 font-semibold uppercase">Audit Logs</span>
+                <span className="font-mono font-bold text-emerald-800 text-sm">
+                  {syncResults.auditLogs.successful} / {syncResults.auditLogs.attempted}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {syncError && (
+          <div className="p-4 bg-rose-50 rounded-xl border border-rose-100 flex items-center gap-2.5 text-rose-800 font-medium text-xs animate-in fade-in duration-200">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <div>
+              <p className="font-bold">Sync warning / failure</p>
+              <p className="text-[11px] opacity-90 mt-0.5">{syncError}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="relative">

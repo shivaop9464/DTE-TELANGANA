@@ -1,4 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Search, 
   Filter, 
@@ -13,8 +14,6 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import { collection, query, getDocs, limit, orderBy, addDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { Employee } from '../types';
 import { formatDate } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
@@ -24,12 +23,14 @@ import { Institution } from '../types';
 
 export function EmployeeList() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showThankYou, setShowThankYou] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   
@@ -132,18 +133,20 @@ export function EmployeeList() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const q = query(collection(db, 'employees'), orderBy('createdAt', 'desc'), limit(100));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Employee[];
+      const token = localStorage.getItem('dte_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+      const empRes = await fetch('/api/employees', { headers });
+      const data = await empRes.json() as Employee[];
       
       // Filter based on role if needed
-      let filteredData = data;
+      let filteredData = Array.isArray(data) ? data : [];
       if (profile && (profile.role === 'PRINCIPAL' || profile.role === 'DATA_ENTRY') && profile.institutionId) {
-        filteredData = data.filter(emp => emp.institutionId === profile.institutionId);
+        filteredData = filteredData.filter(emp => emp.institutionId === profile.institutionId);
       } else if (profile && profile.role === 'EMPLOYEE') {
         const emailLower = (profile.email || '').toLowerCase();
         const usernameLower = (profile.username || '').toLowerCase();
-        filteredData = data.filter(emp => 
+        filteredData = filteredData.filter(emp => 
           (emp.email || '').toLowerCase() === emailLower ||
           (emp.employeeId || '').toLowerCase() === usernameLower ||
           (emp.employeeId || '').toLowerCase() === emailLower
@@ -152,8 +155,9 @@ export function EmployeeList() {
       
       setEmployees(filteredData);
 
-      const instSnap = await getDocs(query(collection(db, 'institutions'), orderBy('name')));
-      setInstitutions(instSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Institution[]);
+      const instRes = await fetch('/api/institutions', { headers });
+      const instData = await instRes.json();
+      setInstitutions(Array.isArray(instData) ? instData : []);
     } catch (err) {
       console.error('Error fetching data:', err);
     } finally {
@@ -224,6 +228,16 @@ export function EmployeeList() {
   const handleSaveEmployee = async (e: FormEvent) => {
     e.preventDefault();
 
+    // Prevent submission on intermediate tabs
+    if (activeTab !== 'deputation') {
+      const tabs: ('personal' | 'social' | 'professional' | 'pay' | 'deputation')[] = ['personal', 'social', 'professional', 'pay', 'deputation'];
+      const nextIdx = tabs.indexOf(activeTab) + 1;
+      if (nextIdx < tabs.length) {
+        handleTabChange(tabs[nextIdx]);
+      }
+      return;
+    }
+
     // Perform solid multi-tab validation on all required inputs
     if (!formData.name?.trim()) { alert("Please enter Name of Regular Employee in Personal Details (Step 1)"); setActiveTab('personal'); return; }
     if (!formData.fatherName?.trim()) { alert("Please enter Father's Name in Personal Details (Step 1)"); setActiveTab('personal'); return; }
@@ -264,24 +278,33 @@ export function EmployeeList() {
         payload.status = 'APPROVED';
       }
 
+      const token = localStorage.getItem('dte_token');
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      };
+
       if (editingId) {
-        await updateDoc(doc(db, 'employees', editingId), {
-          ...payload,
-          updatedAt: new Date().toISOString()
+        const res = await fetch(`/api/employees/${editingId}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(payload)
         });
+        if (!res.ok) throw new Error("Failed to update employee");
       } else {
-        await addDoc(collection(db, 'employees'), {
-          ...payload,
-          status: (profile?.role === 'CTE_ADMIN' || profile?.role === 'SUPER_ADMIN') ? 'APPROVED' : 'PENDING',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+        const res = await fetch('/api/employees', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            ...payload,
+            status: (profile?.role === 'CTE_ADMIN' || profile?.role === 'SUPER_ADMIN') ? 'APPROVED' : 'PENDING'
+          })
         });
+        if (!res.ok) throw new Error("Failed to create employee");
       }
       setIsModalOpen(false);
-      setEditingId(null);
+      setShowThankYou(true);
       fetchData();
-      setFormData(initialFormState);
-      setActiveTab('personal');
     } catch (err) {
       console.error(err);
       alert("Failed to save employee");
@@ -359,10 +382,16 @@ export function EmployeeList() {
 
   const handleStatusUpdate = async (id: string, newStatus: string) => {
     try {
-      await updateDoc(doc(db, 'employees', id), { 
-        status: newStatus,
-        updatedAt: new Date().toISOString()
+      const token = localStorage.getItem('dte_token');
+      const res = await fetch(`/api/employees/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ status: newStatus })
       });
+      if (!res.ok) throw new Error("Failed to update status");
       fetchData();
     } catch (err) {
       console.error(err);
@@ -1192,7 +1221,11 @@ export function EmployeeList() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveEmployee} className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <form 
+              onSubmit={handleSaveEmployee} 
+              onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
+              className="flex-1 flex flex-col min-h-0 overflow-hidden"
+            >
               <div className="p-8 space-y-6 overflow-y-auto flex-1 max-h-[60vh] bg-white">
                 
                 {/* 1. PERSONAL DETAILS TAB */}
@@ -1611,6 +1644,37 @@ export function EmployeeList() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Thank You / Sync Dialog Modal */}
+      {showThankYou && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md p-8 shadow-2xl text-center space-y-6 animate-in fade-in zoom-in duration-200">
+            <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto text-tg-green">
+              <CheckCircle2 className="w-12 h-12" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-2xl font-bold text-slate-900 font-sans">Thank You!</h3>
+              <p className="text-slate-500 text-sm leading-relaxed font-sans">
+                {editingId 
+                  ? 'Your employee record attributes have been successfully updated and safely stored in the secure registry database.' 
+                  : 'The new employee service profile has been successfully uploaded and registered in the database.'}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setShowThankYou(false);
+                setEditingId(null);
+                setFormData(initialFormState);
+                setActiveTab('personal');
+                navigate('/');
+              }}
+              className="w-full py-3 bg-tg-green text-white font-bold text-sm rounded-xl shadow-lg hover:bg-tg-dark transition-all"
+            >
+              OK
+            </button>
           </div>
         </div>
       )}

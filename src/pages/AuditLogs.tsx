@@ -6,8 +6,6 @@ import {
   Activity,
   Search
 } from 'lucide-react';
-import { collection, query, getDocs, orderBy, limit } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { AuditLog } from '../types';
 import { formatDate } from '../lib/utils';
 
@@ -19,10 +17,16 @@ export function AuditLogs() {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const q = query(collection(db, 'auditLogs'), orderBy('timestamp', 'desc'), limit(100));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AuditLog[];
-      setLogs(data);
+      const token = localStorage.getItem('dte_token');
+      const res = await fetch('/api/logs', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setLogs(data);
+      } else {
+        setLogs([]);
+      }
     } catch (err) {
       console.error('Error fetching logs:', err);
     } finally {

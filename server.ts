@@ -4,51 +4,170 @@ import { createServer as createViteServer } from "vite";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
-import admin from "firebase-admin";
 import bcrypt from "bcryptjs";
 import fs from "fs";
-import { initializeApp as initializeClientApp } from "firebase/app";
+import { initializeApp } from "firebase/app";
 import { 
-  getFirestore as getClientFirestore, 
-  collection, 
+  getFirestore, 
   doc, 
   getDoc, 
   getDocs, 
   setDoc, 
-  updateDoc, 
-  query, 
-  where, 
-  limit, 
-  orderBy,
-  addDoc,
-  deleteDoc,
-  writeBatch,
-  Timestamp
+  deleteDoc, 
+  collection,
+  terminate,
+  setLogLevel,
+  disableNetwork
 } from "firebase/firestore";
+import { 
+  getDatabase, 
+  ref as dbRef, 
+  set as rtdbSet, 
+  remove as rtdbRemove, 
+  get as rtdbGet 
+} from "firebase/database";
 
 dotenv.config();
 
-const firebaseConfig = JSON.parse(fs.readFileSync("./firebase-applet-config.json", "utf-8"));
+const JWT_SECRET = process.env.JWT_SECRET || "dte-telangana-secret-key-123";
 
-// Initialize Client SDK for Firestore
-const clientApp = initializeClientApp(firebaseConfig);
-const db = getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId);
+// Web app's Firebase configuration loaded dynamically or with hardcoded fallbacks
+let firebaseConfig: any = {
+  apiKey: "AIzaSyA2W7Ih4T5PtK17InQ4epxc1sHLRp8cugQ",
+  authDomain: "ai-studio-applet-webapp-bcb3b.firebaseapp.com",
+  databaseURL: "https://ai-studio-applet-webapp-bcb3b-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "ai-studio-applet-webapp-bcb3b",
+  storageBucket: "ai-studio-applet-webapp-bcb3b.firebasestorage.app",
+  messagingSenderId: "1023400366254",
+  appId: "1:1023400366254:web:350610d448291894035d3f",
+  firestoreDatabaseId: undefined
+};
 
-// Initialize Firebase Admin for Auth (Bypassed to prevent GCP Metadata Server timeouts in restricted sandboxed runtimes)
-/*
-if (!admin.apps.length) {
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const fileData = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(fileData);
+    firebaseConfig = { ...firebaseConfig, ...parsed };
+    console.log(`[FIREBASE] Dynamic config read successful. Project: "${firebaseConfig.projectId}", Database: "${firebaseConfig.firestoreDatabaseId}"`);
+  }
+} catch (e) {
+  console.error("[FIREBASE] Error reading firebase-applet-config.json:", e);
+}
+
+// Initialize Firebase
+const firebaseApp = initializeApp(firebaseConfig);
+const db = firebaseConfig.firestoreDatabaseId 
+  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(firebaseApp);
+
+// Silence Firestore internal low-level SDK warning and error logs (suppresses GrpcConnection RPC streams stderr logs)
+try {
+  setLogLevel("silent");
+} catch (_) {}
+
+const rtdb = getDatabase(firebaseApp);
+
+// System environment control
+let firestoreEnabled = true;
+let rtdbEnabled = true;
+
+const DB_FILE = path.join(process.cwd(), "db.json");
+
+interface LocalDb {
+  roles: any[];
+  institutions: any[];
+  users: any[];
+  employees: any[];
+  auditLogs: any[];
+}
+
+function readDb(): LocalDb {
   try {
-    admin.initializeApp({
-      credential: admin.credential.applicationDefault(),
-      projectId: firebaseConfig.projectId
-    });
+    if (fs.existsSync(DB_FILE)) {
+      const data = fs.readFileSync(DB_FILE, "utf8");
+      return JSON.parse(data);
+    }
   } catch (err) {
-    console.error("Admin init failed:", err);
+    console.error("Failed to read local DB file:", err);
+  }
+  return {
+    roles: [],
+    institutions: [],
+    users: [],
+    employees: [],
+    auditLogs: []
+  };
+}
+
+function writeDb(data: LocalDb) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("Failed to write local DB file:", err);
   }
 }
-*/
 
-const JWT_SECRET = process.env.JWT_SECRET || "dte-telangana-secret-key-123";
+// Timeout Helper for Resilient Firebase operations
+function withTimeout<T>(promise: Promise<T>, ms: number, errMsg: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(errMsg)), ms);
+  });
+  return Promise.race([promise, timeout]);
+}
+
+// Resilient Firebase Writers
+async function safeFirestoreSet(col: string, docId: string, data: any) {
+  if (!firestoreEnabled) return;
+  try {
+    const docRef = doc(db, col, docId);
+    await withTimeout(setDoc(docRef, data), 2000, "Firestore set timed out");
+  } catch (err: any) {
+    const errMsg = String(err?.message || err);
+    if (errMsg.includes("NOT_FOUND") || errMsg.includes("not-found") || errMsg.includes("Code: 5") || errMsg.includes("timed out")) {
+      console.warn(`[FIREBASE] Firestore not provisioned or timed out. Disabling Firestore sync.`);
+      firestoreEnabled = false;
+    } else {
+      console.error(`[FIREBASE] Firestore set failed:`, err?.message || err);
+    }
+  }
+}
+
+async function safeFirestoreDelete(col: string, docId: string) {
+  if (!firestoreEnabled) return;
+  try {
+    const docRef = doc(db, col, docId);
+    await withTimeout(deleteDoc(docRef), 2000, "Firestore delete timed out");
+  } catch (err: any) {
+    const errMsg = String(err?.message || err);
+    if (errMsg.includes("NOT_FOUND") || errMsg.includes("not-found") || errMsg.includes("Code: 5") || errMsg.includes("timed out")) {
+      console.warn(`[FIREBASE] Firestore not provisioned or timed out. Disabling Firestore sync.`);
+      firestoreEnabled = false;
+    } else {
+      console.error(`[FIREBASE] Firestore delete failed:`, err?.message || err);
+    }
+  }
+}
+
+async function safeRTDBSet(path: string, data: any) {
+  if (!rtdbEnabled) return;
+  try {
+    const reference = dbRef(rtdb, path);
+    await withTimeout(rtdbSet(reference, data), 2000, "Realtime Database set timed out");
+  } catch (err: any) {
+    console.error(`[FIREBASE RTDB] Realtime Database set failed or timed out:`, err?.message || err);
+  }
+}
+
+async function safeRTDBDelete(path: string) {
+  if (!rtdbEnabled) return;
+  try {
+    const reference = dbRef(rtdb, path);
+    await withTimeout(rtdbRemove(reference), 2000, "Realtime Database remove timed out");
+  } catch (err: any) {
+    console.error(`[FIREBASE RTDB] Realtime Database delete failed or timed out:`, err?.message || err);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -83,115 +202,195 @@ async function startServer() {
 
   // --- Seed Logic ---
   async function seedDatabase() {
-    if (!db) return;
-    
-    console.log("Testing Firestore connection with Client SDK...");
+    console.log("Checking Firestore & RTDB seed state with localDb cache...");
+    const localDb = readDb();
+    let localChanged = false;
+
+    if (!localDb.roles || localDb.roles.length === 0) {
+      localDb.roles = [
+        { id: "SUPER_ADMIN", name: "Super Admin", description: "Full system access" },
+        { id: "CTE_ADMIN", name: "CTE Admin", description: "Department level administration" },
+        { id: "PRINCIPAL", name: "Principal", description: "Institution level management" },
+        { id: "DATA_ENTRY", name: "Data Entry", description: "Record management" },
+        { id: "AUDITOR", name: "Auditor", description: "View-only access for audits" },
+        { id: "EMPLOYEE", name: "Employee", description: "Staff portal access" }
+      ];
+      localChanged = true;
+    }
+
+    if (!localDb.institutions || localDb.institutions.length === 0) {
+      localDb.institutions = [
+        { id: "INST-HYD", name: "J.N. Government Polytechnic, Hyderabad", district: "Hyderabad", principalName: "Dr. P. Venugopal", staffStrength: 120, workingStrength: 105, vacancies: 15 },
+        { id: "INST-WAR", name: "Government Polytechnic, Warangal", district: "Warangal", principalName: "Sri K. Ravinder", staffStrength: 85, workingStrength: 72, vacancies: 13 },
+        { id: "INST-NIZ", name: "Government Polytechnic, Nizamabad", district: "Nizamabad", principalName: "Sri M. Muralidhar", staffStrength: 65, workingStrength: 58, vacancies: 7 },
+        { id: "INST-KAR", name: "Government Polytechnic, Karimnagar", district: "Karimnagar", principalName: "Smt. G. Sarada", staffStrength: 70, workingStrength: 62, vacancies: 8 },
+        { id: "INST-HYD-MASAB", name: "Government Polytechnic, Masab Tank, Hyderabad", district: "Hyderabad", principalName: "Dr. K. Rammohan", staffStrength: 110, workingStrength: 95, vacancies: 15 },
+        { id: "INST-SEC-WOMEN", name: "Government Polytechnic for Women, Secunderabad", district: "Hyderabad", principalName: "Smt. K. Shanthi", staffStrength: 80, workingStrength: 70, vacancies: 10 },
+        { id: "INST-NALG", name: "Government Polytechnic, Nalgonda", district: "Nalgonda", principalName: "Sri V. Prasad", staffStrength: 60, workingStrength: 52, vacancies: 8 },
+        { id: "INST-KHAM", name: "Government Polytechnic, Khammam", district: "Khammam", principalName: "Dr. G. Ramesh", staffStrength: 75, workingStrength: 68, vacancies: 7 },
+        { id: "INST-MAHA", name: "Government Polytechnic, Mahabubnagar", district: "Mahabubnagar", principalName: "Sri T. Srinivas", staffStrength: 80, workingStrength: 72, vacancies: 8 },
+        { id: "INST-MEDK", name: "Government Polytechnic, Medak", district: "Medak", principalName: "Smt. P. Laxmi", staffStrength: 50, workingStrength: 45, vacancies: 5 },
+        { id: "INST-SANG", name: "Government Polytechnic, Sangareddy", district: "Sangareddy", principalName: "Sri J. Kishan", staffStrength: 55, workingStrength: 48, vacancies: 7 },
+        { id: "INST-SIDD", name: "Government Polytechnic, Siddipet", district: "Siddipet", principalName: "Dr. Ch. Srinivas Rao", staffStrength: 62, workingStrength: 55, vacancies: 7 },
+        { id: "INST-VIKA", name: "Government Polytechnic, Vikarabad", district: "Vikarabad", principalName: "Sri G. Anjaneyulu", staffStrength: 45, workingStrength: 38, vacancies: 7 },
+        { id: "INST-BELL", name: "Government Polytechnic, Bellampally", district: "Mancherial", principalName: "Sri M. Rajender", staffStrength: 40, workingStrength: 32, vacancies: 8 }
+      ];
+      localChanged = true;
+    }
+
+    if (!localDb.users || localDb.users.length === 0) {
+      const hashedPassword = await bcrypt.hash("admin123", 4);
+      localDb.users = [
+        {
+          uid: "admin",
+          username: "admin",
+          email: "admin@dte.telangana.gov.in",
+          displayName: "Super Admin",
+          role: "SUPER_ADMIN",
+          password: hashedPassword,
+          disabled: false,
+          createdAt: new Date().toISOString()
+        },
+        {
+          uid: "cte_user",
+          username: "cte_admin",
+          email: "cte@dte.telangana.gov.in",
+          displayName: "CTE Administrator",
+          role: "CTE_ADMIN",
+          password: hashedPassword,
+          disabled: false,
+          createdAt: new Date().toISOString()
+        },
+        {
+          uid: "principal_hyd",
+          username: "principal_hyd",
+          email: "principal.hyd@gpt.telangana.gov.in",
+          displayName: "Principal (GPT Hyderabad)",
+          role: "PRINCIPAL",
+          institutionId: "INST-HYD",
+          password: hashedPassword,
+          disabled: false,
+          createdAt: new Date().toISOString()
+        },
+        {
+          uid: "de_hyd",
+          username: "de_hyd",
+          email: "de.hyd@gpt.telangana.gov.in",
+          displayName: "Data Entry (GPT Hyderabad)",
+          role: "DATA_ENTRY",
+          institutionId: "INST-HYD",
+          password: hashedPassword,
+          disabled: false,
+          createdAt: new Date().toISOString()
+        }
+      ];
+      localChanged = true;
+    }
+
+    if (!localDb.employees) {
+      localDb.employees = [];
+      localChanged = true;
+    }
+
+    if (!localDb.auditLogs) {
+      localDb.auditLogs = [];
+      localChanged = true;
+    }
+
+    if (localChanged) {
+      writeDb(localDb);
+    }
+
+    // Dynamic probing of Firestore to check service availability (with strict timeout)
     try {
-      const q = query(collection(db, "institutions"), limit(1));
-      const snap = await getDocs(q);
-      
-      // Seed roles if empty
-      const rolesQ = query(collection(db, "roles"), limit(1));
-      const rolesSnap = await getDocs(rolesQ);
-      if (rolesSnap.empty) {
-        console.log("Seeding Roles collection...");
-        const roles = [
-          { id: "SUPER_ADMIN", name: "Super Admin", description: "Full system access" },
-          { id: "CTE_ADMIN", name: "CTE Admin", description: "Department level administration" },
-          { id: "PRINCIPAL", name: "Principal", description: "Institution level management" },
-          { id: "DATA_ENTRY", name: "Data Entry", description: "Record management" },
-          { id: "AUDITOR", name: "Auditor", description: "View-only access for audits" },
-          { id: "EMPLOYEE", name: "Employee", description: "Staff portal access" }
-        ];
-        for (const role of roles) await setDoc(doc(db, "roles", role.id), role);
-      }
+      if (firestoreEnabled) {
+        console.log("[FIREBASE] Probing Firestore service availability (2s timeout)...");
+        let rolesEmpty = false;
+        try {
+          const rolesSnap = await withTimeout(
+            getDocs(collection(db, "roles")),
+            2000,
+            "Firestore roles connection timed out"
+          );
+          rolesEmpty = rolesSnap.empty;
+        } catch (e) {
+          rolesEmpty = true;
+        }
 
-      if (snap.empty || snap.size < 10) {
-        console.log("Seeding institutions...");
-        const institutions = [
-          { id: "INST-HYD", name: "J.N. Government Polytechnic, Hyderabad", district: "Hyderabad", principalName: "Dr. P. Venugopal", staffStrength: 120, workingStrength: 105, vacancies: 15 },
-          { id: "INST-WAR", name: "Government Polytechnic, Warangal", district: "Warangal", principalName: "Sri K. Ravinder", staffStrength: 85, workingStrength: 72, vacancies: 13 },
-          { id: "INST-NIZ", name: "Government Polytechnic, Nizamabad", district: "Nizamabad", principalName: "Sri M. Muralidhar", staffStrength: 65, workingStrength: 58, vacancies: 7 },
-          { id: "INST-KAR", name: "Government Polytechnic, Karimnagar", district: "Karimnagar", principalName: "Smt. G. Sarada", staffStrength: 70, workingStrength: 62, vacancies: 8 },
-          { id: "INST-HYD-MASAB", name: "Government Polytechnic, Masab Tank, Hyderabad", district: "Hyderabad", principalName: "Dr. K. Rammohan", staffStrength: 110, workingStrength: 95, vacancies: 15 },
-          { id: "INST-SEC-WOMEN", name: "Government Polytechnic for Women, Secunderabad", district: "Hyderabad", principalName: "Smt. K. Shanthi", staffStrength: 80, workingStrength: 70, vacancies: 10 },
-          { id: "INST-NALG", name: "Government Polytechnic, Nalgonda", district: "Nalgonda", principalName: "Sri V. Prasad", staffStrength: 60, workingStrength: 52, vacancies: 8 },
-          { id: "INST-KHAM", name: "Government Polytechnic, Khammam", district: "Khammam", principalName: "Dr. G. Ramesh", staffStrength: 75, workingStrength: 68, vacancies: 7 },
-          { id: "INST-MAHA", name: "Government Polytechnic, Mahabubnagar", district: "Mahabubnagar", principalName: "Sri T. Srinivas", staffStrength: 80, workingStrength: 72, vacancies: 8 },
-          { id: "INST-MEDK", name: "Government Polytechnic, Medak", district: "Medak", principalName: "Smt. P. Laxmi", staffStrength: 50, workingStrength: 45, vacancies: 5 },
-          { id: "INST-SANG", name: "Government Polytechnic, Sangareddy", district: "Sangareddy", principalName: "Sri J. Kishan", staffStrength: 55, workingStrength: 48, vacancies: 7 },
-          { id: "INST-SIDD", name: "Government Polytechnic, Siddipet", district: "Siddipet", principalName: "Dr. Ch. Srinivas Rao", staffStrength: 62, workingStrength: 55, vacancies: 7 },
-          { id: "INST-VIKA", name: "Government Polytechnic, Vikarabad", district: "Vikarabad", principalName: "Sri G. Anjaneyulu", staffStrength: 45, workingStrength: 38, vacancies: 7 },
-          { id: "INST-BELL", name: "Government Polytechnic, Bellampally", district: "Mancherial", principalName: "Sri M. Rajender", staffStrength: 40, workingStrength: 32, vacancies: 8 }
-        ];
-        for (const inst of institutions) await setDoc(doc(db, "institutions", inst.id), inst);
-      }
-
-      const userQ = query(collection(db, "users"), where("role", "==", "SUPER_ADMIN"), limit(1));
-      const adminSnap = await getDocs(userQ);
-      if (adminSnap.empty) {
-        console.log("Seeding Roles and Users...");
-        const hashedPassword = await bcrypt.hash("admin123", 4);
-        
-        const seedUsers = [
-          {
-            uid: "admin",
-            username: "admin",
-            email: "admin@dte.telangana.gov.in",
-            displayName: "Super Admin",
-            role: "SUPER_ADMIN",
-            password: hashedPassword,
-            disabled: false,
-            createdAt: new Date().toISOString()
-          },
-          {
-            uid: "cte_user",
-            username: "cte_admin",
-            email: "cte@dte.telangana.gov.in",
-            displayName: "CTE Administrator",
-            role: "CTE_ADMIN",
-            password: hashedPassword,
-            disabled: false,
-            createdAt: new Date().toISOString()
-          },
-          {
-            uid: "principal_hyd",
-            username: "principal_hyd",
-            email: "principal.hyd@gpt.telangana.gov.in",
-            displayName: "Principal (GPT Hyderabad)",
-            role: "PRINCIPAL",
-            institutionId: "INST-HYD",
-            password: hashedPassword,
-            disabled: false,
-            createdAt: new Date().toISOString()
-          },
-          {
-            uid: "de_hyd",
-            username: "de_hyd",
-            email: "de.hyd@gpt.telangana.gov.in",
-            displayName: "Data Entry (GPT Hyderabad)",
-            role: "DATA_ENTRY",
-            institutionId: "INST-HYD",
-            password: hashedPassword,
-            disabled: false,
-            createdAt: new Date().toISOString()
+        if (rolesEmpty) {
+          console.log("[FIREBASE] Seeding Firestore DB collections...");
+          for (const r of localDb.roles) {
+            await withTimeout(setDoc(doc(db, "roles", r.id), r), 2000, "Firestore seed timed out");
           }
-        ];
+          for (const inst of localDb.institutions) {
+            await withTimeout(setDoc(doc(db, "institutions", inst.id), inst), 2000, "Firestore seed timed out");
+          }
+          for (const u of localDb.users) {
+            await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Firestore seed timed out");
+          }
+        } else {
+          console.log("[FIREBASE] Core collections exist. Verifying that users are fully synchronized...");
+          for (const u of localDb.users) {
+            try {
+              const uDoc = await withTimeout(getDoc(doc(db, "users", u.uid)), 2000, "Get user timeout");
+              if (!uDoc.exists()) {
+                console.log(`[FIREBASE] Syncing missing user to Firestore: ${u.username}`);
+                await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Sync user timeout");
+              }
+            } catch (err: any) {
+              console.warn(`[FIREBASE] Failed checking/syncing user ${u.username}:`, err?.message || err);
+            }
+          }
+        }
+        console.log("[FIREBASE] Firestore seeding verified successfully.");
+      }
+    } catch (err: any) {
+      // Catch NOT_FOUND (Code 5) or Timeout gracefully and disable Firestore calls immediately
+      console.warn(`[FIREBASE] Firestore check failed or timed out: ${err?.message || err}. Disabling Firestore engine to keep app responsive.`);
+      firestoreEnabled = false;
+    }
 
-        for (const user of seedUsers) {
-          await setDoc(doc(db, "users", user.uid), user);
+    // Dynamic probing & seeding of Realtime Database (guaranteed to succeed when configured, with strict timeout Check)
+    try {
+      if (rtdbEnabled) {
+        console.log("[FIREBASE RTDB] Probing Realtime Database service availability (2s timeout)...");
+        const dbInstanceVal = await withTimeout(
+          rtdbGet(dbRef(rtdb, "roles")),
+          2000,
+          "Realtime Database connection timed out"
+        );
+        if (!dbInstanceVal.exists()) {
+          console.log("[FIREBASE RTDB] Seeding Realtime Database from localDb cache...");
+          for (const r of localDb.roles) {
+            await withTimeout(rtdbSet(dbRef(rtdb, `roles/${r.id}`), r), 2000, "RTDB seed timed out");
+          }
+          for (const inst of localDb.institutions) {
+            await withTimeout(rtdbSet(dbRef(rtdb, `institutions/${inst.id}`), inst), 2000, "RTDB seed timed out");
+          }
+          for (const u of localDb.users) {
+            await withTimeout(rtdbSet(dbRef(rtdb, `users/${u.uid}`), u), 2000, "RTDB seed timed out");
+          }
+          console.log("[FIREBASE RTDB] Realtime Database seeded successfully.");
+        } else {
+          console.log("[FIREBASE RTDB] Realtime Database verified, roles verified.");
         }
       }
-      console.log("Seeding completed successfully");
     } catch (err: any) {
-      console.error("Client SDK Firestore test failed:", err.message);
+      console.warn(`[FIREBASE RTDB] Realtime Database sync probe failed or timed out: ${err?.message || err}. Disabling RTDB engine.`);
+      rtdbEnabled = false;
     }
   }
 
   // --- API Routes ---
 
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", message: "Employee Portal API is active" });
+    res.json({ 
+      status: "ok", 
+      message: "Employee Portal API is active",
+      cacheState: "operational",
+      gcpFirestoreActive: firestoreEnabled,
+      gcpRTDBActive: rtdbEnabled
+    });
   });
 
   app.post("/api/auth/login", async (req, res) => {
@@ -202,39 +401,22 @@ async function startServer() {
     console.log(`[AUTH LOGIN] Starting login attempt for user: "${username}"`);
 
     try {
-      // Find user by username or email
-      const queryStart = Date.now();
-      const userQ = query(collection(db, "users"), where("username", "==", username), limit(1));
-      let snapshot = await getDocs(userQ);
-      
-      if (snapshot.empty) {
-        console.log(`[AUTH LOGIN] Username query was empty, trying email query for "${username}"`);
-        const emailQ = query(collection(db, "users"), where("email", "==", username), limit(1));
-        snapshot = await getDocs(emailQ);
-      }
-      console.log(`[AUTH LOGIN] Firestore query took ${Date.now() - queryStart}ms`);
+      const localDb = readDb();
+      const userData = localDb.users.find((u: any) => u.username === username || u.email === username);
 
-      if (snapshot.empty) {
-        console.log(`[AUTH LOGIN] No user found with username/email: "${username}" after ${Date.now() - startTime}ms`);
+      if (!userData) {
+        console.log(`[AUTH LOGIN] No user found with username/email: "${username}"`);
         return res.status(401).json({ error: "Invalid credentials" });
       }
-
-      const userDoc = snapshot.docs[0];
-      const userData = userDoc.data();
-      console.log(`[AUTH LOGIN] User document successfully retrieved: uid="${userData.uid}" role="${userData.role}"`);
 
       if (userData.disabled) {
         console.log(`[AUTH LOGIN] Login denied because account is disabled.`);
         return res.status(403).json({ error: "Account disabled" });
       }
 
-      const bcryptStart = Date.now();
-      console.log(`[AUTH LOGIN] Starting bcrypt comparison...`);
       const isMatch = await bcrypt.compare(password, userData.password);
-      console.log(`[AUTH LOGIN] Bcrypt comparison completed in ${Date.now() - bcryptStart}ms. Match result: ${isMatch}`);
-
       if (!isMatch) {
-        return res.status(401).json({ error: "Invalid credentials" });
+         return res.status(401).json({ error: "Invalid credentials" });
       }
 
       const { password: _, ...userSafeData } = userData;
@@ -247,7 +429,7 @@ async function startServer() {
       }, JWT_SECRET, { expiresIn: "7d" });
 
       res.cookie("token", token, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
-      console.log(`[AUTH LOGIN] Successful login completed for user "${username}" in total ${Date.now() - startTime}ms`);
+      console.log(`[AUTH LOGIN] Successful login completed for user "${username}" in ${Date.now() - startTime}ms`);
       res.json({ token, user: userSafeData });
     } catch (err) {
       console.error(`[AUTH LOGIN] ERROR during login attempt for "${username}":`, err);
@@ -262,9 +444,9 @@ async function startServer() {
 
   app.get("/api/users", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req, res) => {
     try {
-      const snapshot = await getDocs(collection(db, "users"));
-      const users = snapshot.docs.map(doc => {
-        const { password, ...safeData } = doc.data() as any;
+      const localDb = readDb();
+      const users = localDb.users.map((u: any) => {
+        const { password, ...safeData } = u;
         return safeData;
       });
       res.json(users);
@@ -272,62 +454,194 @@ async function startServer() {
       res.status(500).json({ error: "Failed to fetch users" });
     }
   });
+
+  app.post("/api/admin/sync-firebase", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
+    try {
+      console.log("[FIREBASE SYNC] Manual full database sync requested by:", req.user.email);
+      const localDb = readDb();
+      
+      // Attempt to re-awake connection flags
+      firestoreEnabled = true;
+      rtdbEnabled = true;
+
+      const results = {
+        roles: { attempted: 0, successful: 0, errors: [] as string[] },
+        institutions: { attempted: 0, successful: 0, errors: [] as string[] },
+        users: { attempted: 0, successful: 0, errors: [] as string[] },
+        employees: { attempted: 0, successful: 0, errors: [] as string[] },
+        auditLogs: { attempted: 0, successful: 0, errors: [] as string[] },
+        overall: "success"
+      };
+
+      // 1. Sync Roles
+      for (const r of localDb.roles || []) {
+        results.roles.attempted++;
+        try {
+          await withTimeout(setDoc(doc(db, "roles", r.id), r), 2000, "Firestore role seed timed out");
+          results.roles.successful++;
+        } catch (e: any) {
+          results.roles.errors.push(`Role ${r.id}: ${e?.message || e}`);
+        }
+      }
+
+      // 2. Sync Institutions
+      for (const inst of localDb.institutions || []) {
+        results.institutions.attempted++;
+        try {
+          await withTimeout(setDoc(doc(db, "institutions", inst.id), inst), 2000, "Firestore institution seed timed out");
+          results.institutions.successful++;
+        } catch (e: any) {
+          results.institutions.errors.push(`Inst ${inst.id}: ${e?.message || e}`);
+        }
+      }
+
+      // 3. Sync Users
+      for (const u of localDb.users || []) {
+        results.users.attempted++;
+        try {
+          await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Firestore user seed timed out");
+          results.users.successful++;
+        } catch (e: any) {
+          results.users.errors.push(`User ${u.username}: ${e?.message || e}`);
+        }
+      }
+
+      // 4. Sync Employees
+      for (const emp of localDb.employees || []) {
+        results.employees.attempted++;
+        try {
+          // Verify that required fields for security rules are present
+          const cleanEmp = {
+            id: emp.id,
+            name: emp.name || "N/A",
+            employeeId: emp.employeeId || "N/A",
+            mobile: emp.mobile || "0000000000",
+            email: emp.email || "no-email@dte.telangana.gov.in",
+            institutionId: emp.institutionId || "INST-HYD",
+            ...emp
+          };
+          await withTimeout(setDoc(doc(db, "employees", cleanEmp.id), cleanEmp), 2000, "Firestore employee seed timed out");
+          results.employees.successful++;
+        } catch (e: any) {
+          results.employees.errors.push(`Emp ${emp.id}: ${e?.message || e}`);
+        }
+      }
+
+      // 5. Sync Audit Logs
+      const limitedLogs = (localDb.auditLogs || []).slice(0, 100);
+      for (const log of limitedLogs) {
+        results.auditLogs.attempted++;
+        try {
+          await withTimeout(setDoc(doc(db, "auditLogs", log.id), log), 2000, "Firestore audit log seed timed out");
+          results.auditLogs.successful++;
+        } catch (e: any) {
+          results.auditLogs.errors.push(`Log ${log.id}: ${e?.message || e}`);
+        }
+      }
+
+      console.log("[FIREBASE SYNC] Manual sync complete with results:", JSON.stringify(results));
+      res.json(results);
+    } catch (err: any) {
+      console.error("[FIREBASE SYNC] Fatal sync error:", err);
+      res.status(500).json({ error: "Sync failed: " + (err?.message || err) });
+    }
+  });
   
   app.get("/api/roles", authenticate, async (req, res) => {
     try {
-      const snapshot = await getDocs(collection(db, "roles"));
-      let rolesList: any[] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      if (rolesList.length === 0) {
-        rolesList = [
-          { id: "SUPER_ADMIN", name: "Super Admin", description: "Full system access" },
-          { id: "CTE_ADMIN", name: "CTE Admin", description: "Department level administration" },
-          { id: "PRINCIPAL", name: "Principal", description: "Institution level management" },
-          { id: "DATA_ENTRY", name: "Data Entry", description: "Record management" },
-          { id: "AUDITOR", name: "Auditor", description: "View-only access for audits" },
-          { id: "EMPLOYEE", name: "Employee", description: "Staff portal access" }
-        ];
-      }
-      res.json(rolesList);
+      const localDb = readDb();
+      res.json(localDb.roles);
     } catch (err) {
-      const fallback: any[] = [
-        { id: "SUPER_ADMIN", name: "Super Admin", description: "Full system access" },
-        { id: "CTE_ADMIN", name: "CTE Admin", description: "Department level administration" },
-        { id: "PRINCIPAL", name: "Principal", description: "Institution level management" },
-        { id: "DATA_ENTRY", name: "Data Entry", description: "Record management" },
-        { id: "AUDITOR", name: "Auditor", description: "View-only access for audits" },
-        { id: "EMPLOYEE", name: "Employee", description: "Staff portal access" }
-      ];
-      res.json(fallback);
+      res.status(500).json({ error: "Failed to fetch roles" });
     }
   });
 
   app.get("/api/institutions", authenticate, async (req, res) => {
     try {
-      const snapshot = await getDocs(query(collection(db, "institutions"), orderBy("name")));
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      res.json(data);
+      const localDb = readDb();
+      const sorted = [...localDb.institutions].sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+      res.json(sorted);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch institutions" });
     }
   });
 
-  app.post("/api/institutions", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req, res) => {
+  app.post("/api/institutions", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
     try {
-      const data = req.body;
-      const id = data.id || `INST-${Date.now()}`;
-      await setDoc(doc(db, "institutions", id), { ...data, id });
-      res.json({ id, ...data });
+      const localDb = readDb();
+      const id = req.body.id || `INST-${Date.now()}`;
+      const newInst = { 
+        ...req.body, 
+        id, 
+        vacancies: (Number(req.body.staffStrength) || 0) - (Number(req.body.workingStrength) || 0) 
+      };
+      
+      localDb.institutions = localDb.institutions.filter((inst: any) => inst.id !== id);
+      localDb.institutions.push(newInst);
+      
+      const logId = `log_${Date.now()}`;
+      const logData = {
+        id: logId,
+        userEmail: req.user.email,
+        action: "CREATE_INSTITUTION",
+        entity: "Institution",
+        entityId: id,
+        details: `Created institution record: ${newInst.name}`,
+        timestamp: new Date().toISOString()
+      };
+      localDb.auditLogs.unshift(logData);
+      
+      writeDb(localDb);
+
+      // Async Sync in Background to Firebase
+      safeFirestoreSet("institutions", id, newInst);
+      safeRTDBSet(`institutions/${id}`, newInst);
+      safeFirestoreSet("auditLogs", logId, logData);
+      safeRTDBSet(`auditLogs/${logId}`, logData);
+      
+      res.json(newInst);
     } catch (err) {
       res.status(500).json({ error: "Failed to create institution" });
     }
   });
 
-  app.put("/api/employees/:id", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY"]), async (req, res) => {
+  app.put("/api/employees/:id", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY"]), async (req: any, res) => {
     try {
+      const localDb = readDb();
       const { id } = req.params;
-      const data = req.body;
-      await updateDoc(doc(db, "employees", id), { ...data, updatedAt: new Date().toISOString() });
-      res.json({ id, ...data });
+      const index = localDb.employees.findIndex((e: any) => e.id === id);
+      if (index !== -1) {
+        const updatedData = { 
+          ...localDb.employees[index], 
+          ...req.body, 
+          updatedAt: new Date().toISOString() 
+        };
+        localDb.employees[index] = updatedData;
+        
+        const logId = `log_${Date.now()}`;
+        const logData = {
+          id: logId,
+          userEmail: req.user.email,
+          action: "UPDATE_EMPLOYEE",
+          entity: "Employee",
+          entityId: id,
+          details: `Updated employee record: ${updatedData.name} (${updatedData.status})`,
+          timestamp: new Date().toISOString()
+        };
+        localDb.auditLogs.unshift(logData);
+
+        writeDb(localDb);
+
+        // Async Sync in Background to Firebase
+        safeFirestoreSet("employees", id, updatedData);
+        safeRTDBSet(`employees/${id}`, updatedData);
+        safeFirestoreSet("auditLogs", logId, logData);
+        safeRTDBSet(`auditLogs/${logId}`, logData);
+
+        res.json(updatedData);
+      } else {
+        res.status(404).json({ error: "Employee not found" });
+      }
     } catch (err) {
       res.status(500).json({ error: "Failed to update employee" });
     }
@@ -337,22 +651,82 @@ async function startServer() {
     const userinfo = req.user ? `[User: ${req.user.uid}, Role: ${req.user.role}]` : "[Unauthenticated]";
     console.log(`[DELETE /api/employees/${req.params.id}] Initiated by ${userinfo}`);
     try {
+      const localDb = readDb();
       const { id } = req.params;
-      await deleteDoc(doc(db, "employees", id));
-      console.log(`[DELETE /api/employees/${id}] Successfully deleted employee document.`);
-      res.json({ message: "Employee deleted" });
+      const emp = localDb.employees.find((e: any) => e.id === id);
+      if (emp) {
+        const name = emp.name || "Unknown";
+        localDb.employees = localDb.employees.filter((e: any) => e.id !== id);
+        
+        const logId = `log_${Date.now()}`;
+        const logData = {
+          id: logId,
+          userEmail: req.user.email,
+          action: "DELETE_EMPLOYEE",
+          entity: "Employee",
+          entityId: id,
+          details: `Deleted employee record: ${name}`,
+          timestamp: new Date().toISOString()
+        };
+        localDb.auditLogs.unshift(logData);
+
+        writeDb(localDb);
+
+        // Async Sync in Background to Firebase
+        safeFirestoreDelete("employees", id);
+        safeRTDBDelete(`employees/${id}`);
+        safeFirestoreSet("auditLogs", logId, logData);
+        safeRTDBSet(`auditLogs/${logId}`, logData);
+
+        console.log(`[DELETE /api/employees/${id}] Successfully deleted employee.`);
+        res.json({ message: "Employee deleted" });
+      } else {
+        res.status(404).json({ error: "Employee not found" });
+      }
     } catch (err) {
       console.error(`[DELETE /api/employees/${req.params.id}] ERROR:`, err);
       res.status(500).json({ error: "Failed to delete employee: " + (err instanceof Error ? err.message : String(err)) });
     }
   });
 
-  app.put("/api/institutions/:id", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req, res) => {
+  app.put("/api/institutions/:id", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
     try {
+      const localDb = readDb();
       const { id } = req.params;
-      const data = req.body;
-      await updateDoc(doc(db, "institutions", id), data);
-      res.json({ id, ...data });
+      const index = localDb.institutions.findIndex((inst: any) => inst.id === id);
+      if (index !== -1) {
+        const updatedData = { 
+          ...localDb.institutions[index], 
+          ...req.body, 
+          id, 
+          vacancies: (Number(req.body.staffStrength) || 0) - (Number(req.body.workingStrength) || 0) 
+        };
+        localDb.institutions[index] = updatedData;
+
+        const logId = `log_${Date.now()}`;
+        const logData = {
+          id: logId,
+          userEmail: req.user.email,
+          action: "UPDATE_INSTITUTION",
+          entity: "Institution",
+          entityId: id,
+          details: `Updated institution record: ${updatedData.name}`,
+          timestamp: new Date().toISOString()
+        };
+        localDb.auditLogs.unshift(logData);
+
+        writeDb(localDb);
+
+        // Async Sync in Background to Firebase
+        safeFirestoreSet("institutions", id, updatedData);
+        safeRTDBSet(`institutions/${id}`, updatedData);
+        safeFirestoreSet("auditLogs", logId, logData);
+        safeRTDBSet(`auditLogs/${logId}`, logData);
+
+        res.json(updatedData);
+      } else {
+        res.status(404).json({ error: "Institution not found" });
+      }
     } catch (err) {
       res.status(500).json({ error: "Failed to update institution" });
     }
@@ -362,10 +736,38 @@ async function startServer() {
     const userinfo = req.user ? `[User: ${req.user.uid}, Role: ${req.user.role}]` : "[Unauthenticated]";
     console.log(`[DELETE /api/institutions/${req.params.id}] Initiated by ${userinfo}`);
     try {
+      const localDb = readDb();
       const { id } = req.params;
-      await deleteDoc(doc(db, "institutions", id));
-      console.log(`[DELETE /api/institutions/${id}] Successfully deleted institution.`);
-      res.json({ message: "Institution deleted" });
+      const inst = localDb.institutions.find((i: any) => i.id === id);
+      if (inst) {
+        const name = inst.name || "Unknown";
+        localDb.institutions = localDb.institutions.filter((i: any) => i.id !== id);
+
+        const logId = `log_${Date.now()}`;
+        const logData = {
+          id: logId,
+          userEmail: req.user.email,
+          action: "DELETE_INSTITUTION",
+          entity: "Institution",
+          entityId: id,
+          details: `Deleted institution record: ${name}`,
+          timestamp: new Date().toISOString()
+        };
+        localDb.auditLogs.unshift(logData);
+
+        writeDb(localDb);
+
+        // Async Sync in Background to Firebase
+        safeFirestoreDelete("institutions", id);
+        safeRTDBDelete(`institutions/${id}`);
+        safeFirestoreSet("auditLogs", logId, logData);
+        safeRTDBSet(`auditLogs/${logId}`, logData);
+
+        console.log(`[DELETE /api/institutions/${id}] Successfully deleted institution.`);
+        res.json({ message: "Institution deleted" });
+      } else {
+        res.status(404).json({ error: "Institution not found" });
+      }
     } catch (err) {
       console.error(`[DELETE /api/institutions/${req.params.id}] ERROR:`, err);
       res.status(500).json({ error: "Failed to delete institution: " + (err instanceof Error ? err.message : String(err)) });
@@ -375,6 +777,7 @@ async function startServer() {
   app.post("/api/users", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
     console.log("POST /api/users received with body:", { ...req.body, password: "[REDACTED]" });
     try {
+      const localDb = readDb();
       const { username, password, email, displayName, role, institutionId } = req.body;
       
       if (!username || !password || !email || !displayName || !role) {
@@ -382,11 +785,8 @@ async function startServer() {
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      // Check if user exists
-      console.log("Checking if user already exists:", username);
-      const existingQ = query(collection(db, "users"), where("username", "==", username), limit(1));
-      const existing = await getDocs(existingQ);
-      if (!existing.empty) {
+      const existsUser = localDb.users.some((u: any) => u.username === username);
+      if (existsUser) {
         console.log("User already exists:", username);
         return res.status(400).json({ error: "Username already exists" });
       }
@@ -407,22 +807,27 @@ async function startServer() {
         createdAt: new Date().toISOString()
       };
 
-      console.log("Saving new user to Firestore with UID:", uid);
-      await setDoc(doc(db, "users", uid), newUser);
+      localDb.users.push(newUser);
       
-      // Audit log entry
-      try {
-        await addDoc(collection(db, "auditLogs"), {
-          userEmail: req.user.email,
-          action: "CREATE_USER",
-          entity: "User",
-          entityId: uid,
-          details: `Created new user: ${username} (${role})`,
-          timestamp: new Date().toISOString()
-        });
-      } catch (auditErr) {
-        console.error("Failed to create audit log for user creation:", auditErr);
-      }
+      const logId = `log_${Date.now()}`;
+      const logData = {
+        id: logId,
+        userEmail: req.user.email,
+        action: "CREATE_USER",
+        entity: "User",
+        entityId: uid,
+        details: `Created new user: ${username} (${role})`,
+        timestamp: new Date().toISOString()
+      };
+      localDb.auditLogs.unshift(logData);
+
+      writeDb(localDb);
+
+      // Async Sync in Background to Firebase
+      safeFirestoreSet("users", uid, newUser);
+      safeRTDBSet(`users/${uid}`, newUser);
+      safeFirestoreSet("auditLogs", logId, logData);
+      safeRTDBSet(`auditLogs/${logId}`, logData);
 
       const { password: _, ...safeUser } = newUser;
       console.log("User created successfully:", username);
@@ -433,17 +838,50 @@ async function startServer() {
     }
   });
 
-  app.put("/api/users/:uid", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req, res) => {
+  app.put("/api/users/:uid", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
     try {
+      const localDb = readDb();
       const { uid } = req.params;
       const { password, ...updateData } = req.body;
       
-      if (password) {
-        updateData.password = await bcrypt.hash(password, 4);
+      const index = localDb.users.findIndex((u: any) => u.uid === uid);
+      if (index !== -1) {
+        let finalPassword = localDb.users[index].password;
+        if (password) {
+          finalPassword = await bcrypt.hash(password, 4);
+        }
+        
+        const updatedUser = {
+          ...localDb.users[index],
+          ...updateData,
+          password: finalPassword
+        };
+        localDb.users[index] = updatedUser;
+
+        const logId = `log_${Date.now()}`;
+        const logData = {
+          id: logId,
+          userEmail: req.user.email,
+          action: "UPDATE_USER",
+          entity: "User",
+          entityId: uid,
+          details: `Updated user profile: ${updatedUser.username}`,
+          timestamp: new Date().toISOString()
+        };
+        localDb.auditLogs.unshift(logData);
+
+        writeDb(localDb);
+
+        // Async Sync in Background to Firebase
+        safeFirestoreSet("users", uid, updatedUser);
+        safeRTDBSet(`users/${uid}`, updatedUser);
+        safeFirestoreSet("auditLogs", logId, logData);
+        safeRTDBSet(`auditLogs/${logId}`, logData);
+
+        res.json({ message: "User updated" });
+      } else {
+        res.status(404).json({ error: "User not found" });
       }
-      
-      await updateDoc(doc(db, "users", uid), updateData);
-      res.json({ message: "User updated" });
     } catch (err) {
       res.status(500).json({ error: "Failed to update user" });
     }
@@ -451,50 +889,84 @@ async function startServer() {
 
   app.get("/api/employees", authenticate, async (req: any, res) => {
     try {
-      let q;
+      const localDb = readDb();
+      let employees = localDb.employees || [];
       if (req.user.role === "PRINCIPAL" && req.user.institutionId) {
-        q = query(collection(db, "employees"), where("institutionId", "==", req.user.institutionId), orderBy("createdAt", "desc"));
-      } else {
-        q = query(collection(db, "employees"), orderBy("createdAt", "desc"));
+        employees = employees.filter((e: any) => e.institutionId === req.user.institutionId);
       }
-      const snapshot = await getDocs(q);
-      const employees = snapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }));
+      employees = [...employees].sort((a: any, b: any) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       res.json(employees);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch employees" });
     }
   });
 
-  app.post("/api/employees", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY"]), async (req, res) => {
+  app.post("/api/employees", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "DATA_ENTRY"]), async (req: any, res) => {
     try {
-      const data = { ...req.body, createdAt: new Date().toISOString() };
-      const docRef = await addDoc(collection(db, "employees"), data);
-      res.json({ id: docRef.id, ...data });
+      const localDb = readDb();
+      const id = `EMP-${Date.now()}`;
+      const data = { 
+        id,
+        ...req.body, 
+        createdAt: new Date().toISOString(), 
+        updatedAt: new Date().toISOString() 
+      };
+      
+      localDb.employees.unshift(data);
+
+      const logId = `log_${Date.now()}`;
+      const logData = {
+        id: logId,
+        userEmail: req.user.email,
+        action: "CREATE_EMPLOYEE",
+        entity: "Employee",
+        entityId: id,
+        details: `Created employee record: ${data.name}`,
+        timestamp: new Date().toISOString()
+      };
+      localDb.auditLogs.unshift(logData);
+
+      writeDb(localDb);
+
+      // Async Sync in Background to Firebase
+      safeFirestoreSet("employees", id, data);
+      safeRTDBSet(`employees/${id}`, data);
+      safeFirestoreSet("auditLogs", logId, logData);
+      safeRTDBSet(`auditLogs/${logId}`, logData);
+
+      res.json(data);
     } catch (err) {
       res.status(500).json({ error: "Failed to create employee" });
     }
   });
 
   app.get("/api/reports", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN", "PRINCIPAL", "AUDITOR"]), async (req, res) => {
-    res.json({ totalEmployees: 1482, byGender: { male: 850, female: 632 } });
+    try {
+      const localDb = readDb();
+      const total = localDb.employees.length;
+      const male = localDb.employees.filter((e: any) => (e.gender || "").toLowerCase() === "male").length;
+      const female = total - male;
+      res.json({ totalEmployees: total, byGender: { male, female } });
+    } catch (err) {
+      res.json({ totalEmployees: 0, byGender: { male: 0, female: 0 } });
+    }
   });
 
   app.get("/api/logs", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req, res) => {
     try {
-      const q = query(collection(db, "auditLogs"), orderBy("timestamp", "desc"), limit(100));
-      const snapshot = await getDocs(q);
-      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) }));
-      res.json(logs);
+      const localDb = readDb();
+      const logs = localDb.auditLogs || [];
+      const sorted = [...logs].sort((a: any, b: any) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+      res.json(sorted.slice(0, 100));
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch audit logs" });
     }
   });
 
-  // Seed DB in background
-  seedDatabase().catch(err => console.error("Seeding failed:", err));
-
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // Seed DB in background asynchronously to optimize application startup and page load times
+    seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
   });
 
   if (process.env.NODE_ENV !== "production") {

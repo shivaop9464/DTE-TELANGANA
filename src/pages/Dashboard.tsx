@@ -19,8 +19,6 @@ import {
   Cell,
   Legend
 } from 'recharts';
-import { collection, query, getDocs, orderBy } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 
 export function Dashboard() {
@@ -42,11 +40,17 @@ export function Dashboard() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const empSnap = await getDocs(query(collection(db, 'employees'), orderBy('createdAt', 'desc')));
-        const instSnap = await getDocs(collection(db, 'institutions'));
-        
-        let allEmployees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        let allInstitutions = instSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const token = localStorage.getItem('dte_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+        const empRes = await fetch('/api/employees', { headers });
+        const instRes = await fetch('/api/institutions', { headers });
+
+        let allEmployees = await empRes.json();
+        let allInstitutions = await instRes.json();
+
+        if (!Array.isArray(allEmployees)) allEmployees = [];
+        if (!Array.isArray(allInstitutions)) allInstitutions = [];
 
         // Role-based filtering
         if (profile && (profile.role === 'PRINCIPAL' || profile.role === 'DATA_ENTRY') && profile.institutionId) {

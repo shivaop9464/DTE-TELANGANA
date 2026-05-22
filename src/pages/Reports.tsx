@@ -10,8 +10,6 @@ import {
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 
 const REPORTS = [
   { id: 'inst-wise', title: 'Institution-wise Staff Report', description: 'Complete breakdown of employees by polytechnic institution.' },
@@ -25,8 +23,15 @@ export function Reports() {
 
   const fetchRealData = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'employees'), orderBy('name')));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const token = localStorage.getItem('dte_token');
+      const res = await fetch('/api/employees', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+      return [];
     } catch (err) {
       console.error(err);
       return [];
