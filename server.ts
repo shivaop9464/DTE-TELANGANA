@@ -24,7 +24,8 @@ import {
   ref as dbRef, 
   set as rtdbSet, 
   remove as rtdbRemove, 
-  get as rtdbGet 
+  get as rtdbGet,
+  enableLogging
 } from "firebase/database";
 
 dotenv.config();
@@ -129,6 +130,9 @@ function getRealtimeDb() {
   if (!rtdbInstance) {
     try {
       rtdbInstance = getDatabase(app);
+      try {
+        enableLogging(false);
+      } catch (_) {}
     } catch (err) {
       console.error("[FIREBASE] Realtime Database init failed:", err);
       rtdbEnabled = false;
@@ -1152,9 +1156,18 @@ async function startServer() {
     }
   });
 
-  const isProduction = 
-    process.env.VERCEL === "1" || 
+  // Under Vercel/Netlify/Lambda environment or when not in standalone start mode, don't execute app.listen() directly
+  const isServerless = 
     !!process.env.VERCEL || 
+    !!process.env.NETLIFY || 
+    !!process.env.LAMBDA_TASK_ROOT || 
+    !!process.env.AWS_LAMBDA_FUNCTION_NAME || 
+    !!process.env.FUNCTIONS_SIGNATURE_TYPE ||
+    process.env.START_SERVER !== "true";
+
+  const isProduction = 
+    isServerless ||
+    process.env.VERCEL === "1" || 
     process.env.NODE_ENV === "production" || 
     !fs.existsSync(path.join(process.cwd(), "server.ts")) || 
     fs.existsSync(path.join(process.cwd(), "dist/index.html"));
@@ -1178,9 +1191,8 @@ async function startServer() {
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  // Under Vercel environment, don't execute app.listen() directly
-  if (process.env.VERCEL) {
-    console.log("[SERVER] Exporting Express app instance for Vercel Serverless environment.");
+  if (isServerless) {
+    console.log("[SERVER] Exporting Express app instance for Serverless / Lambda environment (bypassing listen)");
     // Run seed inside serverless function startup as background promise
     seedDatabase().catch(err => console.error("[SERVERLESS SEED] Seeding failed:", err));
   } else {
@@ -1196,6 +1208,6 @@ async function startServer() {
 
 export { startServer };
 
-if (!process.env.VERCEL) {
+if (process.env.START_SERVER === "true") {
   startServer();
 }
