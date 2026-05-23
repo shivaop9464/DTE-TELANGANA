@@ -1058,7 +1058,7 @@ async function startServer() {
   if (!isProduction) {
     try {
       console.log("[SERVER] Starting in development mode with Vite middleware...");
-      const { createServer: createViteServer } = await import("vite");
+      const { createServer: createViteServer } = await import("vi" + "te");
       const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
       app.use(vite.middlewares);
     } catch (vErr) {
