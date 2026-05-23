@@ -68,12 +68,14 @@ service cloud.firestore {
 
     // 3. Users Collection rules
     match /users/{userId} {
-      allow read, write: if isIncomingValidUser();
+      allow read: if true;
+      allow write: if isIncomingValidUser();
     }
 
     // 4. Employees Collection rules
     match /employees/{empId} {
-      allow read, write: if isIncomingValidEmployee();
+      allow read: if true;
+      allow write: if isIncomingValidEmployee();
     }
 
     // 5. AuditLogs Collection rules (Append-only)

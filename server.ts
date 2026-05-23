@@ -118,34 +118,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, errMsg: string): Promis
 
 // Resilient Firebase Writers
 async function safeFirestoreSet(col: string, docId: string, data: any) {
-  if (!firestoreEnabled) return;
   try {
     const docRef = doc(db, col, docId);
-    await withTimeout(setDoc(docRef, data), 2000, "Firestore set timed out");
+    await withTimeout(setDoc(docRef, data), 3000, "Firestore set timed out");
   } catch (err: any) {
     const errMsg = String(err?.message || err);
-    if (errMsg.includes("NOT_FOUND") || errMsg.includes("not-found") || errMsg.includes("Code: 5") || errMsg.includes("timed out")) {
-      console.warn(`[FIREBASE] Firestore not provisioned or timed out. Disabling Firestore sync.`);
-      firestoreEnabled = false;
-    } else {
-      console.error(`[FIREBASE] Firestore set failed:`, err?.message || err);
-    }
+    console.warn(`[FIREBASE] Firestore set failed for ${col}/${docId}:`, errMsg);
   }
 }
 
 async function safeFirestoreDelete(col: string, docId: string) {
-  if (!firestoreEnabled) return;
   try {
     const docRef = doc(db, col, docId);
-    await withTimeout(deleteDoc(docRef), 2000, "Firestore delete timed out");
+    await withTimeout(deleteDoc(docRef), 3000, "Firestore delete timed out");
   } catch (err: any) {
     const errMsg = String(err?.message || err);
-    if (errMsg.includes("NOT_FOUND") || errMsg.includes("not-found") || errMsg.includes("Code: 5") || errMsg.includes("timed out")) {
-      console.warn(`[FIREBASE] Firestore not provisioned or timed out. Disabling Firestore sync.`);
-      firestoreEnabled = false;
-    } else {
-      console.error(`[FIREBASE] Firestore delete failed:`, err?.message || err);
-    }
+    console.warn(`[FIREBASE] Firestore delete failed for ${col}/${docId}:`, errMsg);
   }
 }
 
@@ -345,9 +333,7 @@ async function startServer() {
         console.log("[FIREBASE] Firestore seeding verified successfully.");
       }
     } catch (err: any) {
-      // Catch NOT_FOUND (Code 5) or Timeout gracefully and disable Firestore calls immediately
-      console.warn(`[FIREBASE] Firestore check failed or timed out: ${err?.message || err}. Disabling Firestore engine to keep app responsive.`);
-      firestoreEnabled = false;
+      console.warn(`[FIREBASE] Firestore check failed or timed out during async seeding. This is normal if database rules/domains are still being configured: ${err?.message || err}`);
     }
 
     // Dynamic probing & seeding of Realtime Database (guaranteed to succeed when configured, with strict timeout Check)
@@ -430,6 +416,28 @@ async function startServer() {
 
       res.cookie("token", token, { httpOnly: true, secure: process.env.NODE_ENV === "production" });
       console.log(`[AUTH LOGIN] Successful login completed for user "${username}" in ${Date.now() - startTime}ms`);
+
+      // Record successful login audit log
+      const logId = `log_${Date.now()}`;
+      const logData = {
+        id: logId,
+        userEmail: userData.email,
+        action: "USER_LOGIN",
+        entity: "User",
+        entityId: userData.uid,
+        details: `Successful login for user: ${userData.username} (${userData.role})`,
+        timestamp: new Date().toISOString()
+      };
+      
+      localDb.auditLogs.unshift(logData);
+      writeDb(localDb);
+
+      // Robust async background sync to Firestore & RTDB
+      safeFirestoreSet("users", userData.uid, userData);
+      safeRTDBSet(`users/${userData.uid}`, userData);
+      safeFirestoreSet("auditLogs", logId, logData);
+      safeRTDBSet(`auditLogs/${logId}`, logData);
+
       res.json({ token, user: userSafeData });
     } catch (err) {
       console.error(`[AUTH LOGIN] ERROR during login attempt for "${username}":`, err);
