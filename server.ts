@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
@@ -56,54 +55,17 @@ try {
   console.error("[FIREBASE] Error reading firebase-applet-config.json:", e);
 }
 
-// Initialize Firebase dynamically and lazily on first access to prevent app crashes on startup
-let _firebaseApp: any = null;
-let _db: any = null;
-let _rtdb: any = null;
+// Initialize Firebase statically and safely (safeguarded with fallback fields above, preventing startup failure)
+const firebaseApp = initializeApp(firebaseConfig);
+const db = firebaseConfig.firestoreDatabaseId 
+  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(firebaseApp);
 
-const getFirebaseApp = () => {
-  if (!_firebaseApp) _firebaseApp = initializeApp(firebaseConfig);
-  return _firebaseApp;
-};
+try {
+  setLogLevel("silent");
+} catch (_) {}
 
-const getDb = () => {
-  if (!_db) {
-    _db = firebaseConfig.firestoreDatabaseId 
-      ? getFirestore(getFirebaseApp(), firebaseConfig.firestoreDatabaseId)
-      : getFirestore(getFirebaseApp());
-    try {
-      setLogLevel("silent");
-    } catch (_) {}
-  }
-  return _db;
-};
-
-const getRtdb = () => {
-  if (!_rtdb) _rtdb = getDatabase(getFirebaseApp());
-  return _rtdb;
-};
-
-const db = new Proxy({}, {
-  get(target, prop, receiver) {
-    const firestoreInstance = getDb();
-    const value = Reflect.get(firestoreInstance, prop);
-    return typeof value === "function" ? value.bind(firestoreInstance) : value;
-  },
-  set(target, prop, value) {
-    return Reflect.set(getDb(), prop, value);
-  }
-}) as any;
-
-const rtdb = new Proxy({}, {
-  get(target, prop, receiver) {
-    const rtdbInstance = getRtdb();
-    const value = Reflect.get(rtdbInstance, prop);
-    return typeof value === "function" ? value.bind(rtdbInstance) : value;
-  },
-  set(target, prop, value) {
-    return Reflect.set(getRtdb(), prop, value);
-  }
-}) as any;
+const rtdb = getDatabase(firebaseApp);
 
 // System environment control
 let firestoreEnabled = true;
@@ -1096,6 +1058,7 @@ async function startServer() {
   if (!isProduction) {
     try {
       console.log("[SERVER] Starting in development mode with Vite middleware...");
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
       app.use(vite.middlewares);
     } catch (vErr) {
