@@ -67,21 +67,75 @@ try {
   console.error("[FIREBASE] Error reading firebase-applet-config.json:", e);
 }
 
-// Initialize Firebase statically and safely (safeguarded with fallback fields above, preventing startup failure)
-const firebaseApp = initializeApp(firebaseConfig);
-const db = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(firebaseApp);
+// Configure dynamic, lazy-initialized Firebase instances to prevent module-level network calls or connection locks on Vercel
+let firebaseApp: any = null;
+let dbInstance: any = null;
+let rtdbInstance: any = null;
 
-try {
-  setLogLevel("silent");
-} catch (_) {}
+let firestoreEnabled = false;
+let rtdbEnabled = false;
 
-const rtdb = getDatabase(firebaseApp);
+// Check if credentials exist in env or JSON configuration on disk
+const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+const hasJsonConfig = fs.existsSync(configPath);
+const hasEnvConfig = !!(process.env.FIREBASE_API_KEY && process.env.FIREBASE_PROJECT_ID);
 
-// System environment control
-let firestoreEnabled = true;
-let rtdbEnabled = true;
+if (hasEnvConfig || hasJsonConfig) {
+  firestoreEnabled = true;
+  rtdbEnabled = true;
+  console.log(`[FIREBASE ENGINE] Integration activated. Storage sync systems primed. Firestore: ${firestoreEnabled}, RTDB: ${rtdbEnabled}`);
+} else {
+  console.log("[FIREBASE ENGINE] Running in purely decoupled Local db.json / In-Memory cache mode. Firebase storage triggers will pass-through silently.");
+}
+
+function getFirebaseApp() {
+  if (!firestoreEnabled && !rtdbEnabled) return null;
+  if (!firebaseApp) {
+    try {
+      firebaseApp = initializeApp(firebaseConfig);
+    } catch (err) {
+      console.error("[FIREBASE] Core initialization failed:", err);
+      firestoreEnabled = false;
+      rtdbEnabled = false;
+    }
+  }
+  return firebaseApp;
+}
+
+function getFirestoreDb() {
+  if (!firestoreEnabled) return null;
+  const app = getFirebaseApp();
+  if (!app) return null;
+  if (!dbInstance) {
+    try {
+      dbInstance = firebaseConfig.firestoreDatabaseId 
+        ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+        : getFirestore(app);
+      try {
+        setLogLevel("silent");
+      } catch (_) {}
+    } catch (err) {
+      console.error("[FIREBASE] Firestore init failed:", err);
+      firestoreEnabled = false;
+    }
+  }
+  return dbInstance;
+}
+
+function getRealtimeDb() {
+  if (!rtdbEnabled) return null;
+  const app = getFirebaseApp();
+  if (!app) return null;
+  if (!rtdbInstance) {
+    try {
+      rtdbInstance = getDatabase(app);
+    } catch (err) {
+      console.error("[FIREBASE] Realtime Database init failed:", err);
+      rtdbEnabled = false;
+    }
+  }
+  return rtdbInstance;
+}
 
 const DB_FILE = path.join(process.cwd(), "db.json");
 
@@ -212,8 +266,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, errMsg: string): Promis
 
 // Resilient Firebase Writers
 async function safeFirestoreSet(col: string, docId: string, data: any) {
+  if (!firestoreEnabled) return;
   try {
-    const docRef = doc(db, col, docId);
+    const fdb = getFirestoreDb();
+    if (!fdb) return;
+    const docRef = doc(fdb, col, docId);
     await withTimeout(setDoc(docRef, data), 3000, "Firestore set timed out");
   } catch (err: any) {
     const errMsg = String(err?.message || err);
@@ -222,8 +279,11 @@ async function safeFirestoreSet(col: string, docId: string, data: any) {
 }
 
 async function safeFirestoreDelete(col: string, docId: string) {
+  if (!firestoreEnabled) return;
   try {
-    const docRef = doc(db, col, docId);
+    const fdb = getFirestoreDb();
+    if (!fdb) return;
+    const docRef = doc(fdb, col, docId);
     await withTimeout(deleteDoc(docRef), 3000, "Firestore delete timed out");
   } catch (err: any) {
     const errMsg = String(err?.message || err);
@@ -234,7 +294,9 @@ async function safeFirestoreDelete(col: string, docId: string) {
 async function safeRTDBSet(path: string, data: any) {
   if (!rtdbEnabled) return;
   try {
-    const reference = dbRef(rtdb, path);
+    const rdb = getRealtimeDb();
+    if (!rdb) return;
+    const reference = dbRef(rdb, path);
     await withTimeout(rtdbSet(reference, data), 2000, "Realtime Database set timed out");
   } catch (err: any) {
     console.error(`[FIREBASE RTDB] Realtime Database set failed or timed out:`, err?.message || err);
@@ -244,7 +306,9 @@ async function safeRTDBSet(path: string, data: any) {
 async function safeRTDBDelete(path: string) {
   if (!rtdbEnabled) return;
   try {
-    const reference = dbRef(rtdb, path);
+    const rdb = getRealtimeDb();
+    if (!rdb) return;
+    const reference = dbRef(rdb, path);
     await withTimeout(rtdbRemove(reference), 2000, "Realtime Database remove timed out");
   } catch (err: any) {
     console.error(`[FIREBASE RTDB] Realtime Database delete failed or timed out:`, err?.message || err);
@@ -386,45 +450,50 @@ async function startServer() {
     // Dynamic probing of Firestore to check service availability (with strict timeout)
     try {
       if (firestoreEnabled) {
-        console.log("[FIREBASE] Probing Firestore service availability (2s timeout)...");
-        let rolesEmpty = false;
-        try {
-          const rolesSnap = await withTimeout(
-            getDocs(collection(db, "roles")),
-            2000,
-            "Firestore roles connection timed out"
-          );
-          rolesEmpty = rolesSnap.empty;
-        } catch (e) {
-          rolesEmpty = true;
-        }
-
-        if (rolesEmpty) {
-          console.log("[FIREBASE] Seeding Firestore DB collections...");
-          for (const r of localDb.roles) {
-            await withTimeout(setDoc(doc(db, "roles", r.id), r), 2000, "Firestore seed timed out");
-          }
-          for (const inst of localDb.institutions) {
-            await withTimeout(setDoc(doc(db, "institutions", inst.id), inst), 2000, "Firestore seed timed out");
-          }
-          for (const u of localDb.users) {
-            await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Firestore seed timed out");
-          }
+        const fdb = getFirestoreDb();
+        if (!fdb) {
+          firestoreEnabled = false;
         } else {
-          console.log("[FIREBASE] Core collections exist. Verifying that users are fully synchronized...");
-          for (const u of localDb.users) {
-            try {
-              const uDoc = await withTimeout(getDoc(doc(db, "users", u.uid)), 2000, "Get user timeout");
-              if (!uDoc.exists()) {
-                console.log(`[FIREBASE] Syncing missing user to Firestore: ${u.username}`);
-                await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Sync user timeout");
+          console.log("[FIREBASE] Probing Firestore service availability (2s timeout)...");
+          let rolesEmpty = false;
+          try {
+            const rolesSnap = await withTimeout(
+              getDocs(collection(fdb, "roles")),
+              2000,
+              "Firestore roles connection timed out"
+            );
+            rolesEmpty = rolesSnap.empty;
+          } catch (e) {
+            rolesEmpty = true;
+          }
+
+          if (rolesEmpty) {
+            console.log("[FIREBASE] Seeding Firestore DB collections...");
+            for (const r of localDb.roles) {
+              await withTimeout(setDoc(doc(fdb, "roles", r.id), r), 2000, "Firestore seed timed out");
+            }
+            for (const inst of localDb.institutions) {
+              await withTimeout(setDoc(doc(fdb, "institutions", inst.id), inst), 2000, "Firestore seed timed out");
+            }
+            for (const u of localDb.users) {
+              await withTimeout(setDoc(doc(fdb, "users", u.uid), u), 2000, "Firestore seed timed out");
+            }
+          } else {
+            console.log("[FIREBASE] Core collections exist. Verifying that users are fully synchronized...");
+            for (const u of localDb.users) {
+              try {
+                const uDoc = await withTimeout(getDoc(doc(fdb, "users", u.uid)), 2000, "Get user timeout");
+                if (!uDoc.exists()) {
+                  console.log(`[FIREBASE] Syncing missing user to Firestore: ${u.username}`);
+                  await withTimeout(setDoc(doc(fdb, "users", u.uid), u), 2000, "Sync user timeout");
+                }
+              } catch (err: any) {
+                console.warn(`[FIREBASE] Failed checking/syncing user ${u.username}:`, err?.message || err);
               }
-            } catch (err: any) {
-              console.warn(`[FIREBASE] Failed checking/syncing user ${u.username}:`, err?.message || err);
             }
           }
+          console.log("[FIREBASE] Firestore seeding verified successfully.");
         }
-        console.log("[FIREBASE] Firestore seeding verified successfully.");
       }
     } catch (err: any) {
       console.warn(`[FIREBASE] Firestore check failed or timed out during async seeding. This is normal if database rules/domains are still being configured: ${err?.message || err}`);
@@ -433,26 +502,31 @@ async function startServer() {
     // Dynamic probing & seeding of Realtime Database (guaranteed to succeed when configured, with strict timeout Check)
     try {
       if (rtdbEnabled) {
-        console.log("[FIREBASE RTDB] Probing Realtime Database service availability (2s timeout)...");
-        const dbInstanceVal = await withTimeout(
-          rtdbGet(dbRef(rtdb, "roles")),
-          2000,
-          "Realtime Database connection timed out"
-        );
-        if (!dbInstanceVal.exists()) {
-          console.log("[FIREBASE RTDB] Seeding Realtime Database from localDb cache...");
-          for (const r of localDb.roles) {
-            await withTimeout(rtdbSet(dbRef(rtdb, `roles/${r.id}`), r), 2000, "RTDB seed timed out");
-          }
-          for (const inst of localDb.institutions) {
-            await withTimeout(rtdbSet(dbRef(rtdb, `institutions/${inst.id}`), inst), 2000, "RTDB seed timed out");
-          }
-          for (const u of localDb.users) {
-            await withTimeout(rtdbSet(dbRef(rtdb, `users/${u.uid}`), u), 2000, "RTDB seed timed out");
-          }
-          console.log("[FIREBASE RTDB] Realtime Database seeded successfully.");
+        const rby = getRealtimeDb();
+        if (!rby) {
+          rtdbEnabled = false;
         } else {
-          console.log("[FIREBASE RTDB] Realtime Database verified, roles verified.");
+          console.log("[FIREBASE RTDB] Probing Realtime Database service availability (2s timeout)...");
+          const dbInstanceVal = await withTimeout(
+            rtdbGet(dbRef(rby, "roles")),
+            2000,
+            "Realtime Database connection timed out"
+          );
+          if (!dbInstanceVal.exists()) {
+            console.log("[FIREBASE RTDB] Seeding Realtime Database from localDb cache...");
+            for (const r of localDb.roles) {
+              await withTimeout(rtdbSet(dbRef(rby, `roles/${r.id}`), r), 2000, "RTDB seed timed out");
+            }
+            for (const inst of localDb.institutions) {
+              await withTimeout(rtdbSet(dbRef(rby, `institutions/${inst.id}`), inst), 2000, "RTDB seed timed out");
+            }
+            for (const u of localDb.users) {
+              await withTimeout(rtdbSet(dbRef(rby, `users/${u.uid}`), u), 2000, "RTDB seed timed out");
+            }
+            console.log("[FIREBASE RTDB] Realtime Database seeded successfully.");
+          } else {
+            console.log("[FIREBASE RTDB] Realtime Database verified, roles verified.");
+          }
         }
       }
     } catch (err: any) {
@@ -560,12 +634,20 @@ async function startServer() {
   app.post("/api/admin/sync-firebase", authenticate, authorize(["SUPER_ADMIN", "CTE_ADMIN"]), async (req: any, res) => {
     try {
       console.log("[FIREBASE SYNC] Manual full database sync requested by:", req.user.email);
-      const localDb = readDb();
       
-      // Attempt to re-awake connection flags
+      // Attempt to re-awake connection flags and load configurations if they were added dynamically
       firestoreEnabled = true;
       rtdbEnabled = true;
 
+      const fdb = getFirestoreDb();
+      if (!fdb) {
+        return res.status(400).json({
+          error: "Firebase Firestore is not initialized. Please verify that your Vercel/environment variables (e.g. FIREBASE_API_KEY, FIREBASE_PROJECT_ID) have been added correctly and try again.",
+          overall: "disabled"
+        });
+      }
+
+      const localDb = readDb();
       const results = {
         roles: { attempted: 0, successful: 0, errors: [] as string[] },
         institutions: { attempted: 0, successful: 0, errors: [] as string[] },
@@ -579,7 +661,7 @@ async function startServer() {
       for (const r of localDb.roles || []) {
         results.roles.attempted++;
         try {
-          await withTimeout(setDoc(doc(db, "roles", r.id), r), 2000, "Firestore role seed timed out");
+          await withTimeout(setDoc(doc(fdb, "roles", r.id), r), 2000, "Firestore role seed timed out");
           results.roles.successful++;
         } catch (e: any) {
           results.roles.errors.push(`Role ${r.id}: ${e?.message || e}`);
@@ -590,7 +672,7 @@ async function startServer() {
       for (const inst of localDb.institutions || []) {
         results.institutions.attempted++;
         try {
-          await withTimeout(setDoc(doc(db, "institutions", inst.id), inst), 2000, "Firestore institution seed timed out");
+          await withTimeout(setDoc(doc(fdb, "institutions", inst.id), inst), 1500, "Firestore institution seed timed out");
           results.institutions.successful++;
         } catch (e: any) {
           results.institutions.errors.push(`Inst ${inst.id}: ${e?.message || e}`);
@@ -601,7 +683,7 @@ async function startServer() {
       for (const u of localDb.users || []) {
         results.users.attempted++;
         try {
-          await withTimeout(setDoc(doc(db, "users", u.uid), u), 2000, "Firestore user seed timed out");
+          await withTimeout(setDoc(doc(fdb, "users", u.uid), u), 1500, "Firestore user seed timed out");
           results.users.successful++;
         } catch (e: any) {
           results.users.errors.push(`User ${u.username}: ${e?.message || e}`);
@@ -622,7 +704,7 @@ async function startServer() {
             institutionId: emp.institutionId || "INST-HYD",
             ...emp
           };
-          await withTimeout(setDoc(doc(db, "employees", cleanEmp.id), cleanEmp), 2000, "Firestore employee seed timed out");
+          await withTimeout(setDoc(doc(fdb, "employees", cleanEmp.id), cleanEmp), 1500, "Firestore employee seed timed out");
           results.employees.successful++;
         } catch (e: any) {
           results.employees.errors.push(`Emp ${emp.id}: ${e?.message || e}`);
@@ -634,7 +716,7 @@ async function startServer() {
       for (const log of limitedLogs) {
         results.auditLogs.attempted++;
         try {
-          await withTimeout(setDoc(doc(db, "auditLogs", log.id), log), 2000, "Firestore audit log seed timed out");
+          await withTimeout(setDoc(doc(fdb, "auditLogs", log.id), log), 1500, "Firestore audit log seed timed out");
           results.auditLogs.successful++;
         } catch (e: any) {
           results.auditLogs.errors.push(`Log ${log.id}: ${e?.message || e}`);
