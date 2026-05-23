@@ -530,8 +530,13 @@ async function startServer() {
         }
       }
     } catch (err: any) {
-      console.warn(`[FIREBASE RTDB] Realtime Database sync probe failed or timed out: ${err?.message || err}. Disabling RTDB engine.`);
-      rtdbEnabled = false;
+      const errMsg = String(err?.message || err);
+      if (errMsg.toLowerCase().includes("permission denied") || errMsg.toLowerCase().includes("permission_denied")) {
+        console.warn(`[FIREBASE RTDB] Realtime Database rules currently restrict unauthenticated read probes: ${errMsg}. RTDB engine remains ENABLED so that authenticated client actions can read/write successfully.`);
+      } else {
+        console.warn(`[FIREBASE RTDB] Realtime Database sync probe failed or timed out: ${errMsg}. Disabling RTDB engine.`);
+        rtdbEnabled = false;
+      }
     }
   }
 
