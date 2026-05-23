@@ -1053,7 +1053,12 @@ async function startServer() {
     }
   });
 
-  const isProduction = process.env.NODE_ENV === "production" || !fs.existsSync(path.join(process.cwd(), "server.ts")) || fs.existsSync(path.join(process.cwd(), "dist/index.html"));
+  const isProduction = 
+    process.env.VERCEL === "1" || 
+    !!process.env.VERCEL || 
+    process.env.NODE_ENV === "production" || 
+    !fs.existsSync(path.join(process.cwd(), "server.ts")) || 
+    fs.existsSync(path.join(process.cwd(), "dist/index.html"));
 
   if (!isProduction) {
     try {
