@@ -971,20 +971,31 @@ async function startServer() {
     }
   });
 
+  const isProduction = process.env.NODE_ENV === "production" || !fs.existsSync(path.join(process.cwd(), "server.ts")) || fs.existsSync(path.join(process.cwd(), "dist/index.html"));
+
+  if (!isProduction) {
+    try {
+      console.log("[SERVER] Starting in development mode with Vite middleware...");
+      const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+      app.use(vite.middlewares);
+    } catch (vErr) {
+      console.error("[SERVER] Failed to initialize Vite dev server, falling back to static dist serving:", vErr);
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
+    }
+  } else {
+    console.log("[SERVER] Starting in production mode, serving static files from dist...");
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
+  }
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     // Seed DB in background asynchronously to optimize application startup and page load times
     seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
   });
-
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
-  }
 }
 
 startServer();

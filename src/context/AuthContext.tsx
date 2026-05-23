@@ -55,8 +55,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Login failed');
+      let errorMessage = 'Login failed';
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } else {
+          const textResponse = await response.text();
+          errorMessage = textResponse.substring(0, 150) || `HTTP error ${response.status}`;
+        }
+      } catch (e) {
+        errorMessage = `HTTP error ${response.status}`;
+      }
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
