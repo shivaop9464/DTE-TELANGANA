@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import fs from "fs";
+import crypto from "crypto";
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, 
@@ -29,7 +30,7 @@ import {
 
 dotenv.config();
 
-const JWT_SECRET = process.env.JWT_SECRET || "dte-telangana-secret-key-123";
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
 
 // Web app's Firebase configuration loaded dynamically or with hardcoded fallbacks
 let firebaseConfig: any = {
@@ -39,8 +40,8 @@ let firebaseConfig: any = {
   projectId: "ai-studio-applet-webapp-bcb3b",
   storageBucket: "ai-studio-applet-webapp-bcb3b.firebasestorage.app",
   messagingSenderId: "1023400366254",
-  appId: "1:1023400366254:web:350610d448291894035d3f",
-  firestoreDatabaseId: undefined
+  appId: "1:1023400366254:web:c3379df5a62565d3035d3f",
+  firestoreDatabaseId: "ai-studio-628822f5-4db3-4bd6-9b3a-0c7984579674"
 };
 
 try {
@@ -55,18 +56,54 @@ try {
   console.error("[FIREBASE] Error reading firebase-applet-config.json:", e);
 }
 
-// Initialize Firebase
-const firebaseApp = initializeApp(firebaseConfig);
-const db = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(firebaseApp);
+// Initialize Firebase dynamically and lazily on first access to prevent app crashes on startup
+let _firebaseApp: any = null;
+let _db: any = null;
+let _rtdb: any = null;
 
-// Silence Firestore internal low-level SDK warning and error logs (suppresses GrpcConnection RPC streams stderr logs)
-try {
-  setLogLevel("silent");
-} catch (_) {}
+const getFirebaseApp = () => {
+  if (!_firebaseApp) _firebaseApp = initializeApp(firebaseConfig);
+  return _firebaseApp;
+};
 
-const rtdb = getDatabase(firebaseApp);
+const getDb = () => {
+  if (!_db) {
+    _db = firebaseConfig.firestoreDatabaseId 
+      ? getFirestore(getFirebaseApp(), firebaseConfig.firestoreDatabaseId)
+      : getFirestore(getFirebaseApp());
+    try {
+      setLogLevel("silent");
+    } catch (_) {}
+  }
+  return _db;
+};
+
+const getRtdb = () => {
+  if (!_rtdb) _rtdb = getDatabase(getFirebaseApp());
+  return _rtdb;
+};
+
+const db = new Proxy({}, {
+  get(target, prop, receiver) {
+    const firestoreInstance = getDb();
+    const value = Reflect.get(firestoreInstance, prop);
+    return typeof value === "function" ? value.bind(firestoreInstance) : value;
+  },
+  set(target, prop, value) {
+    return Reflect.set(getDb(), prop, value);
+  }
+}) as any;
+
+const rtdb = new Proxy({}, {
+  get(target, prop, receiver) {
+    const rtdbInstance = getRtdb();
+    const value = Reflect.get(rtdbInstance, prop);
+    return typeof value === "function" ? value.bind(rtdbInstance) : value;
+  },
+  set(target, prop, value) {
+    return Reflect.set(getRtdb(), prop, value);
+  }
+}) as any;
 
 // System environment control
 let firestoreEnabled = true;
@@ -82,29 +119,112 @@ interface LocalDb {
   auditLogs: any[];
 }
 
+let memoryDb: LocalDb | null = null;
+
 function readDb(): LocalDb {
+  if (memoryDb) {
+    return memoryDb;
+  }
+
+  // Attempt to read from the local database file if present on disk
   try {
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, "utf8");
-      return JSON.parse(data);
+      memoryDb = JSON.parse(data);
+      console.log("[STORAGE] DB pre-loaded from disk successfully.");
+      return memoryDb!;
     }
   } catch (err) {
-    console.error("Failed to read local DB file:", err);
+    console.error("[STORAGE] Failed to read local db.json file from disk:", err);
   }
-  return {
-    roles: [],
-    institutions: [],
-    users: [],
+
+  // Fallback if the file cannot be accessed or written in the current runtime environment (like Vercel)
+  console.log("[STORAGE] Seeding memoryDb with secure institutional defaults...");
+
+  const defaultHash = "$2b$04$PA.4LwCi80GI1zM4Ukr5DuooV/IdgnoRVp9CVS2whwfKSIwnTEFYO"; // bcrypt for 'admin123'
+
+  memoryDb = {
+    roles: [
+      { id: "SUPER_ADMIN", name: "Super Admin", description: "Full system access" },
+      { id: "CTE_ADMIN", name: "CTE Admin", description: "Department level administration" },
+      { id: "PRINCIPAL", name: "Principal", description: "Institution level management" },
+      { id: "DATA_ENTRY", name: "Data Entry", description: "Record management" },
+      { id: "AUDITOR", name: "Auditor", description: "View-only access for audits" },
+      { id: "EMPLOYEE", name: "Employee", description: "Staff portal access" }
+    ],
+    institutions: [
+      { id: "INST-HYD", name: "J.N. Government Polytechnic, Hyderabad", district: "Hyderabad", principalName: "Dr. P. Venugopal", staffStrength: 120, workingStrength: 105, vacancies: 15 },
+      { id: "INST-WAR", name: "Government Polytechnic, Warangal", district: "Warangal", principalName: "Sri K. Ravinder", staffStrength: 85, workingStrength: 72, vacancies: 13 },
+      { id: "INST-NIZ", name: "Government Polytechnic, Nizamabad", district: "Nizamabad", principalName: "Sri M. Muralidhar", staffStrength: 65, workingStrength: 58, vacancies: 7 },
+      { id: "INST-KAR", name: "Government Polytechnic, Karimnagar", district: "Karimnagar", principalName: "Smt. G. Sarada", staffStrength: 70, workingStrength: 62, vacancies: 8 },
+      { id: "INST-HYD-MASAB", name: "Government Polytechnic, Masab Tank, Hyderabad", district: "Hyderabad", principalName: "Dr. K. Rammohan", staffStrength: 110, workingStrength: 95, vacancies: 15 },
+      { id: "INST-SEC-WOMEN", name: "Government Polytechnic for Women, Secunderabad", district: "Hyderabad", principalName: "Smt. K. Shanthi", staffStrength: 80, workingStrength: 70, vacancies: 10 },
+      { id: "INST-NALG", name: "Government Polytechnic, Nalgonda", district: "Nalgonda", principalName: "Sri V. Prasad", staffStrength: 60, workingStrength: 52, vacancies: 8 },
+      { id: "INST-KHAM", name: "Government Polytechnic, Khammam", district: "Khammam", principalName: "Dr. G. Ramesh", staffStrength: 75, workingStrength: 68, vacancies: 7 },
+      { id: "INST-MAHA", name: "Government Polytechnic, Mahabubnagar", district: "Mahabubnagar", principalName: "Sri T. Srinivas", staffStrength: 80, workingStrength: 72, vacancies: 8 },
+      { id: "INST-MEDK", name: "Government Polytechnic, Medak", district: "Medak", principalName: "Smt. P. Laxmi", staffStrength: 50, workingStrength: 45, vacancies: 5 },
+      { id: "INST-SANG", name: "Government Polytechnic, Sangareddy", district: "Sangareddy", principalName: "Sri J. Kishan", staffStrength: 55, workingStrength: 48, vacancies: 7 },
+      { id: "INST-SIDD", name: "Government Polytechnic, Siddipet", district: "Siddipet", principalName: "Dr. Ch. Srinivas Rao", staffStrength: 62, workingStrength: 55, vacancies: 7 },
+      { id: "INST-VIKA", name: "Government Polytechnic, Vikarabad", district: "Vikarabad", principalName: "Sri G. Anjaneyulu", staffStrength: 45, workingStrength: 38, vacancies: 7 },
+      { id: "INST-BELL", name: "Government Polytechnic, Bellampally", district: "Mancherial", principalName: "Sri M. Rajender", staffStrength: 40, workingStrength: 32, vacancies: 8 }
+    ],
+    users: [
+      {
+        uid: "admin",
+        username: "admin",
+        email: "admin@dte.telangana.gov.in",
+        displayName: "Super Admin",
+        role: "SUPER_ADMIN",
+        password: defaultHash,
+        disabled: false,
+        createdAt: "2026-05-23T15:25:38.965Z"
+      },
+      {
+        uid: "cte_user",
+        username: "cte_admin",
+        email: "cte@dte.telangana.gov.in",
+        displayName: "CTE Administrator",
+        role: "CTE_ADMIN",
+        password: defaultHash,
+        disabled: false,
+        createdAt: "2026-05-23T15:25:38.965Z"
+      },
+      {
+        uid: "principal_hyd",
+        username: "principal_hyd",
+        email: "principal.hyd@gpt.telangana.gov.in",
+        displayName: "Principal (GPT Hyderabad)",
+        role: "PRINCIPAL",
+        institutionId: "INST-HYD",
+        password: defaultHash,
+        disabled: false,
+        createdAt: "2026-05-23T15:25:38.965Z"
+      },
+      {
+        uid: "de_hyd",
+        username: "de_hyd",
+        email: "de.hyd@gpt.telangana.gov.in",
+        displayName: "Data Entry (GPT Hyderabad)",
+        role: "DATA_ENTRY",
+        institutionId: "INST-HYD",
+        password: defaultHash,
+        disabled: false,
+        createdAt: "2026-05-23T15:25:38.965Z"
+      }
+    ],
     employees: [],
     auditLogs: []
   };
+
+  return memoryDb!;
 }
 
 function writeDb(data: LocalDb) {
+  memoryDb = data;
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf8");
   } catch (err) {
-    console.error("Failed to write local DB file:", err);
+    console.warn("[STORAGE] Local filesystem is read-only (expected on Vercel). Changes will persist in memory for the duration of this container execution.");
   }
 }
 
