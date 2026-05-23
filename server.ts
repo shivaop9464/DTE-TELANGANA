@@ -33,14 +33,14 @@ const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("he
 
 // Web app's Firebase configuration loaded dynamically or with hardcoded fallbacks
 let firebaseConfig: any = {
-  apiKey: "AIzaSyA2W7Ih4T5PtK17InQ4epxc1sHLRp8cugQ",
-  authDomain: "ai-studio-applet-webapp-bcb3b.firebaseapp.com",
-  databaseURL: "https://ai-studio-applet-webapp-bcb3b-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "ai-studio-applet-webapp-bcb3b",
-  storageBucket: "ai-studio-applet-webapp-bcb3b.firebasestorage.app",
-  messagingSenderId: "1023400366254",
-  appId: "1:1023400366254:web:c3379df5a62565d3035d3f",
-  firestoreDatabaseId: "ai-studio-628822f5-4db3-4bd6-9b3a-0c7984579674"
+  apiKey: process.env.FIREBASE_API_KEY || "AIzaSyA2W7Ih4T5PtK17InQ4epxc1sHLRp8cugQ",
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || "ai-studio-applet-webapp-bcb3b.firebaseapp.com",
+  databaseURL: process.env.FIREBASE_DATABASE_URL || "https://ai-studio-applet-webapp-bcb3b-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: process.env.FIREBASE_PROJECT_ID || "ai-studio-applet-webapp-bcb3b",
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "ai-studio-applet-webapp-bcb3b.firebasestorage.app",
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "1023400366254",
+  appId: process.env.FIREBASE_APP_ID || "1:1023400366254:web:c3379df5a62565d3035d3f",
+  firestoreDatabaseId: process.env.FIREBASE_FIRESTORE_DATABASE_ID || "ai-studio-628822f5-4db3-4bd6-9b3a-0c7984579674"
 };
 
 try {
@@ -48,8 +48,20 @@ try {
   if (fs.existsSync(configPath)) {
     const fileData = fs.readFileSync(configPath, "utf8");
     const parsed = JSON.parse(fileData);
-    firebaseConfig = { ...firebaseConfig, ...parsed };
-    console.log(`[FIREBASE] Dynamic config read successful. Project: "${firebaseConfig.projectId}", Database: "${firebaseConfig.firestoreDatabaseId}"`);
+    // Overlay values from JSON file, but environment variables still have the absolute highest priority:
+    firebaseConfig = { 
+      ...firebaseConfig, 
+      ...parsed,
+      ...(process.env.FIREBASE_API_KEY && { apiKey: process.env.FIREBASE_API_KEY }),
+      ...(process.env.FIREBASE_AUTH_DOMAIN && { authDomain: process.env.FIREBASE_AUTH_DOMAIN }),
+      ...(process.env.FIREBASE_DATABASE_URL && { databaseURL: process.env.FIREBASE_DATABASE_URL }),
+      ...(process.env.FIREBASE_PROJECT_ID && { projectId: process.env.FIREBASE_PROJECT_ID }),
+      ...(process.env.FIREBASE_STORAGE_BUCKET && { storageBucket: process.env.FIREBASE_STORAGE_BUCKET }),
+      ...(process.env.FIREBASE_MESSAGING_SENDER_ID && { messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID }),
+      ...(process.env.FIREBASE_APP_ID && { appId: process.env.FIREBASE_APP_ID }),
+      ...(process.env.FIREBASE_FIRESTORE_DATABASE_ID && { firestoreDatabaseId: process.env.FIREBASE_FIRESTORE_DATABASE_ID })
+    };
+    console.log(`[FIREBASE] Config resolved. Project: "${firebaseConfig.projectId}", Database: "${firebaseConfig.firestoreDatabaseId}"`);
   }
 } catch (e) {
   console.error("[FIREBASE] Error reading firebase-applet-config.json:", e);
