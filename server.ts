@@ -1215,7 +1215,15 @@ async function startServer() {
     }
   });
 
+  const isServerless = 
+    !!process.env.VERCEL || 
+    !!process.env.NETLIFY || 
+    !!process.env.LAMBDA_TASK_ROOT || 
+    !!process.env.AWS_LAMBDA_FUNCTION_NAME || 
+    !!process.env.FUNCTIONS_SIGNATURE_TYPE;
+
   const isProduction = 
+    isServerless ||
     process.env.NODE_ENV === "production" || 
     !fs.existsSync(path.join(process.cwd(), "server.ts")) || 
     fs.existsSync(path.join(process.cwd(), "dist/index.html"));
@@ -1239,15 +1247,29 @@ async function startServer() {
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    // Seed DB in background asynchronously to optimize application startup and page load times
-    seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
-  });
+  if (!isServerless) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      // Seed DB in background asynchronously to optimize application startup and page load times
+      seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
+    });
+  } else {
+    console.log("[SERVER] Bypassing app.listen() for serverless context.");
+    seedDatabase().catch(err => console.error("[SERVERLESS SEED] Seeding failed:", err));
+  }
 
   return app;
 }
 
 export { startServer };
 
-startServer();
+const isServerlessEnvironment = 
+  !!process.env.VERCEL || 
+  !!process.env.NETLIFY || 
+  !!process.env.LAMBDA_TASK_ROOT || 
+  !!process.env.AWS_LAMBDA_FUNCTION_NAME || 
+  !!process.env.FUNCTIONS_SIGNATURE_TYPE;
+
+if (!isServerlessEnvironment) {
+  startServer();
+}
