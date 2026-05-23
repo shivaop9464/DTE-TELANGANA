@@ -1156,18 +1156,7 @@ async function startServer() {
     }
   });
 
-  // Under Vercel/Netlify/Lambda environment or when not in standalone start mode, don't execute app.listen() directly
-  const isServerless = 
-    !!process.env.VERCEL || 
-    !!process.env.NETLIFY || 
-    !!process.env.LAMBDA_TASK_ROOT || 
-    !!process.env.AWS_LAMBDA_FUNCTION_NAME || 
-    !!process.env.FUNCTIONS_SIGNATURE_TYPE ||
-    process.env.START_SERVER !== "true";
-
   const isProduction = 
-    isServerless ||
-    process.env.VERCEL === "1" || 
     process.env.NODE_ENV === "production" || 
     !fs.existsSync(path.join(process.cwd(), "server.ts")) || 
     fs.existsSync(path.join(process.cwd(), "dist/index.html"));
@@ -1191,23 +1180,15 @@ async function startServer() {
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  if (isServerless) {
-    console.log("[SERVER] Exporting Express app instance for Serverless / Lambda environment (bypassing listen)");
-    // Run seed inside serverless function startup as background promise
-    seedDatabase().catch(err => console.error("[SERVERLESS SEED] Seeding failed:", err));
-  } else {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-      // Seed DB in background asynchronously to optimize application startup and page load times
-      seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
-    });
-  }
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    // Seed DB in background asynchronously to optimize application startup and page load times
+    seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
+  });
 
   return app;
 }
 
 export { startServer };
 
-if (process.env.START_SERVER === "true") {
-  startServer();
-}
+startServer();
