@@ -6,7 +6,11 @@
       "destination": "/api/index"
     },
     {
-      "source": "/((?!api|assets|favicon.ico).*)",
+      "source": "/login",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/((?!api).*)" ,
       "destination": "/index.html"
     }
   ]

@@ -1,4 +1,4 @@
-import { startServer } from "../server";
+import { startServer } from "../dist/server.cjs";
 
 let appPromise: any = null;
 
