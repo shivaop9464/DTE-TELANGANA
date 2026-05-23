@@ -991,11 +991,24 @@ async function startServer() {
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    // Seed DB in background asynchronously to optimize application startup and page load times
-    seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
-  });
+  // Under Vercel environment, don't execute app.listen() directly
+  if (process.env.VERCEL) {
+    console.log("[SERVER] Exporting Express app instance for Vercel Serverless environment.");
+    // Run seed inside serverless function startup as background promise
+    seedDatabase().catch(err => console.error("[SERVERLESS SEED] Seeding failed:", err));
+  } else {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      // Seed DB in background asynchronously to optimize application startup and page load times
+      seedDatabase().catch(err => console.error("Seeding failed during async background init:", err));
+    });
+  }
+
+  return app;
 }
 
-startServer();
+export { startServer };
+
+if (!process.env.VERCEL) {
+  startServer();
+}
