@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import fs from "fs";
 import crypto from "crypto";
+import admin from "firebase-admin";
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, 
@@ -72,6 +73,8 @@ try {
 let firebaseApp: any = null;
 let dbInstance: any = null;
 let rtdbInstance: any = null;
+let adminAppInitialized = false;
+let adminRtdbInstance: any = null;
 
 let firestoreEnabled = false;
 let rtdbEnabled = false;
@@ -139,6 +142,40 @@ function getRealtimeDb() {
     }
   }
   return rtdbInstance;
+}
+
+function getAdminRealtimeDb() {
+  if (!rtdbEnabled) return null;
+  if (!adminAppInitialized) {
+    try {
+      if (admin.apps.length === 0) {
+        admin.initializeApp({
+          credential: admin.credential.applicationDefault(),
+          databaseURL: firebaseConfig.databaseURL,
+          projectId: firebaseConfig.projectId
+        });
+      }
+      adminAppInitialized = true;
+    } catch (err) {
+      try {
+        if (admin.apps.length === 0) {
+          admin.initializeApp({
+            databaseURL: firebaseConfig.databaseURL,
+            projectId: firebaseConfig.projectId
+          });
+        }
+        adminAppInitialized = true;
+      } catch (err2) {
+        adminAppInitialized = false;
+      }
+    }
+  }
+  if (adminAppInitialized && !adminRtdbInstance) {
+    try {
+      adminRtdbInstance = admin.database();
+    } catch (_) {}
+  }
+  return adminRtdbInstance;
 }
 
 const DB_FILE = path.join(process.cwd(), "db.json");
@@ -298,24 +335,46 @@ async function safeFirestoreDelete(col: string, docId: string) {
 async function safeRTDBSet(path: string, data: any) {
   if (!rtdbEnabled) return;
   try {
+    const adminRdb = getAdminRealtimeDb();
+    if (adminRdb) {
+      await withTimeout(adminRdb.ref(path).set(data), 2000, "Admin Realtime Database set timed out");
+      return;
+    }
+
     const rdb = getRealtimeDb();
     if (!rdb) return;
     const reference = dbRef(rdb, path);
     await withTimeout(rtdbSet(reference, data), 2000, "Realtime Database set timed out");
   } catch (err: any) {
-    console.error(`[FIREBASE RTDB] Realtime Database set failed or timed out:`, err?.message || err);
+    const errMsg = String(err?.message || err);
+    if (errMsg.toLowerCase().includes("permission") || errMsg.toLowerCase().includes("denied")) {
+      console.log(`[FIREBASE RTDB] Realtime Database write at ${path} ignored due to rule limits (e.g., unauthenticated client).`);
+    } else {
+      console.error(`[FIREBASE RTDB] Realtime Database set failed or timed out:`, errMsg);
+    }
   }
 }
 
 async function safeRTDBDelete(path: string) {
   if (!rtdbEnabled) return;
   try {
+    const adminRdb = getAdminRealtimeDb();
+    if (adminRdb) {
+      await withTimeout(adminRdb.ref(path).remove(), 2000, "Admin Realtime Database remove timed out");
+      return;
+    }
+
     const rdb = getRealtimeDb();
     if (!rdb) return;
     const reference = dbRef(rdb, path);
     await withTimeout(rtdbRemove(reference), 2000, "Realtime Database remove timed out");
   } catch (err: any) {
-    console.error(`[FIREBASE RTDB] Realtime Database delete failed or timed out:`, err?.message || err);
+    const errMsg = String(err?.message || err);
+    if (errMsg.toLowerCase().includes("permission") || errMsg.toLowerCase().includes("denied")) {
+      console.log(`[FIREBASE RTDB] Realtime Database delete at ${path} ignored due to rule limits (e.g., unauthenticated client).`);
+    } else {
+      console.error(`[FIREBASE RTDB] Realtime Database delete failed or timed out:`, errMsg);
+    }
   }
 }
 
